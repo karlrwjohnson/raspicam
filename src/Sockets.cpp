@@ -181,7 +181,7 @@ Socket::_readerThread()
 {
 	try
 	{
-		cout << "Reader thread started.\n";
+		IF_TRACE(cout << "Reader thread started.\n";)
 
 		while (1 /* ?? */)
 		{
@@ -233,6 +233,17 @@ Socket::_readerThread()
 			 << "!! " << e.what() << endl;
 		return NULL;
 	}
+}
+
+void
+Socket::joinReaderThread ()
+{
+	TRACE_ENTER();
+	int err = pthread_join(readerHandle, NULL);
+	if (err) {
+		THROW_ERROR("pthread_join() failed: " << strerror(err));
+	}
+	TRACE_EXIT();
 }
 
 ///// Server /////

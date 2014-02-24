@@ -26,6 +26,12 @@ class Socket {
 	void
 	sendMessage (uint32_t type, size_t length, void* data);
 
+	/**
+	 * Waits for the thread which reads data from the server to terminate.
+	 */
+	void
+	joinReaderThread ();
+
   protected:
 
 	int fd;

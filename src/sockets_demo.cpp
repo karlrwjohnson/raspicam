@@ -8,7 +8,7 @@
 
 #include "Sockets.h"
 
-#include "../Log.h"
+#include "Log.h"
 
 using namespace std;
 

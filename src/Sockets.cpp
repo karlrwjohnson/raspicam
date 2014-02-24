@@ -19,7 +19,7 @@
 #include <vector>       // vector
 #include <unistd.h>     // close()
 
-#include "../Log.h"
+#include "Log.h"
 #include "Sockets.h"
 
 using namespace std;

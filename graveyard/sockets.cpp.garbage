@@ -1,0 +1,83 @@
+
+#include <net/if.h>     // struct ifreq
+#include <netinet/in.h> // struct sockaddr_in
+
+#include <sys/ioctl.h>  // ioctl()
+#include <sys/socket.h> // socket()
+
+#include <errno.h>    // errno
+#include <cstdio>     // printf()
+#include <cstring>    // strerror()
+#include <iostream>   // cout
+#include <stdexcept>  // exceptions
+#include <sstream>    // stringstream (used by Log.h)
+#include <string>     // strings
+#include <vector>     // vector
+
+#include "../Log.h"
+
+using namespace std;
+
+const unsigned char _localhostIp[4] = { 127, 0, 0, 1 };
+const in_addr_t LOCALHOST_IP_ADDR = *((in_addr_t*) _localhostIp);
+
+const in_port_t DEFAULT_PORT = 32123;
+
+string
+ip2string (in_addr_t ipAddr) {
+	uint8_t* ipAddr_p = (uint8_t*) &ipAddr;
+	uint32_t a = ipAddr_p[0];
+	uint32_t b = ipAddr_p[1];
+	uint32_t c = ipAddr_p[2];
+	uint32_t d = ipAddr_p[3];
+	stringstream ss;
+	ss << a << '.' << b << '.' << c << '.' << d;
+	return ss.str();
+}
+
+int
+main (int argc, char* args[]) {
+
+	cout << "Opening socket\n";
+	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	if (sockfd == -1) {
+		THROW_ERROR("Failed to open socket.");
+	}
+
+	cout << "Querying IP address\n";
+	int requestBufferSize = 10;
+	vector<ifreq> requestBuffer = vector<ifreq>(requestBufferSize);
+	ifconf requestConf;
+	requestConf.ifc_len = requestBufferSize * sizeof(ifreq);
+	requestConf.ifc_req = &requestBuffer[0];
+	if (ioctl(sockfd, SIOCGIFCONF, &requestConf)) {
+		THROW_ERROR("Failed to get list of interface IP addresses: " << strerror(errno));
+	}
+
+	in_addr_t ipAddress;
+	for (int i = 0; i * sizeof(ifreq) < requestConf.ifc_len; i++) {
+		sockaddr_in* addressStruct = (sockaddr_in*) &requestBuffer[i].ifr_addr;
+		ipAddress = addressStruct->sin_addr.s_addr;
+cout << "ipaddress = " << ipAddress << endl;
+		if (ipAddress != LOCALHOST_IP_ADDR) {
+			cout << "Found non-loopback ip address " << ip2string(ipAddress)
+			     << " on interface " << requestBuffer[i].ifr_name << "." << endl;
+			break;
+		}
+	}
+
+	sockaddr_in bindReq;
+	sockaddr *bindReq_p;
+	memset(&bindReq, 0, sizeof(bindReq));
+	bindReq.sin_family = AF_INET;
+	bindReq.sin_port = DEFAULT_PORT;
+	bindReq.sin_addr.s_addr = ipAddress;
+	cout << "Binding to socket with IP address "
+	     << ip2string(bindReq.sin_addr.s_addr)
+	     << " and port " << bindReq.sin_port << endl;	
+	if (bind(sockfd, bindReq_p, sizeof(bindReq))) {
+		THROW_ERROR("Failed to bind to an ip address and port: " << strerror(errno));
+	}
+	
+
+}

@@ -1,0 +1,519 @@
+#include <errno.h>
+#include <fcntl.h>     // open(), O_RDWR -- for opening /dev/video*
+#include <unistd.h>
+
+#include <cstdio>      // printf
+#include <cstdlib>
+#include <cstring>
+#include <iostream>    // cout
+#include <memory>      // shared_ptr()
+#include <stdexcept>   // runtime_exception
+#include <sstream>     // stringstream
+#include <string>      // strings
+#include <vector>      // vectors
+
+#include <linux/videodev2.h>
+
+#include <sys/ioctl.h> // ioctl()
+#include <sys/mman.h>  // mmap(), PROT_READ and PROT_WRITE
+#include <sys/time.h>  // fps timer
+
+#include "webcam_demo.h"
+#include "WebcamViewer.h"
+#include "Log.h"
+
+using namespace std;
+
+const string DEFAULT_CAMERA = "/dev/video0";
+
+static int
+xioctl (int fd, int request, void *arg) {
+	int r;
+	do {
+		r = ioctl(fd, request, arg);
+	} while (r == -1 && errno == EINTR);
+	return r;
+}
+
+class File {
+  public:
+	int fd;
+	string filename;
+
+	void
+	_close ()
+	{
+		if (fd != 0) {
+			cout << "Closing file " << filename << "\n";
+			close(fd);
+			fd = 0;
+		}
+	}
+
+	File () :
+		filename (""),
+		fd (0)
+	{ }
+
+	File (string filename_, int flags) :
+		filename (filename_),
+		fd (0)
+	{
+		fd = open(filename.c_str(), flags);
+
+		if (fd == -1) {
+			fd = 0;
+			THROW_ERROR("Error opening " << filename << ": " << strerror(errno));
+		} else {
+			cout << "Opened device " << filename << " as file descriptor " << fd << "\n";
+		}
+	}
+
+	~File ()
+	{
+		_close();
+	}
+};
+
+/**
+ * Wrapper around a v4l2_buffer that automatically maps and unmaps it to memory
+ * on {con,de}struction
+ */
+class MappedBuffer {
+  private:
+	v4l2_buffer _buffer;
+
+  public:
+  	int fd;
+	size_t length;
+	int index;
+	void *data;
+
+  public:
+
+	MappedBuffer () :
+		index  (-1),
+		data   (NULL),
+		length (0)
+	{ }
+
+	MappedBuffer (int _fd, int _index) :
+		fd     (_fd),
+		index  (_index),
+		data   (NULL),
+		length (0)
+	{
+		_buffer = {0};
+		_buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		_buffer.memory = V4L2_MEMORY_MMAP;
+		_buffer.index = index;
+
+		cout << "Getting information on frame buffer " << index << "...\n";
+		if (xioctl(fd, VIDIOC_QUERYBUF, &_buffer)) {
+			THROW_ERROR("Error getting information on buffer " << index << ": " << strerror(errno));
+		}
+
+		length = _buffer.length;
+
+		data = mmap (NULL, _buffer.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, _buffer.m.offset);
+		if (errno) {
+			THROW_ERROR("Failed to map buffer " << index << ": " << strerror(errno));
+		}
+	}
+
+	~MappedBuffer ()
+	{
+		if (data != NULL)
+		{
+			cout << "Unmapping buffer " << index << "\n";
+			munmap(data, length);
+			data = NULL;
+		}
+	}
+
+	void
+	enqueue ()
+	{
+		cout << "Enqueing buffer " << index << "\n";
+		if (xioctl(fd, VIDIOC_QBUF, &_buffer)) {
+			THROW_ERROR("Error enqueing buffer " << index << ": " << strerror(errno));
+		}
+	}
+
+	void
+	dequeue()
+	{
+		cout << "Retrieving frame from buffer " << index << "\n";
+		if (xioctl(fd, VIDIOC_DQBUF, &_buffer) == -1) {
+			THROW_ERROR("Error retrieving frame from buffer " << index << ": " << strerror(errno));
+		} else {
+			cout << "Frame retrieved from buffer " << index << "\n";
+		}
+	}
+};
+
+class Webcam {
+
+	/** Some methods need a pointer to the constant defined in videodev2.h **/
+	int v4l2_buf_type_video_capture;
+
+	shared_ptr<File> device;
+
+	vector< shared_ptr<MappedBuffer> > framebuffers;
+
+	int currentBuffer;
+
+	bool capturing;
+
+  public:
+
+	Webcam (string filename) :
+		device(shared_ptr<File>(new File(filename, O_RDWR))),
+		v4l2_buf_type_video_capture(V4L2_BUF_TYPE_VIDEO_CAPTURE)
+	{
+		int input_num = 0;
+		cout << "Selecting input " << input_num << "\n";
+		if (xioctl(device->fd, VIDIOC_S_INPUT, &input_num) == -1) {
+			THROW_ERROR("Error selecing input " << input_num << ": " << strerror(errno));
+		}
+	}
+
+	~Webcam ()
+	{
+		if (capturing) {
+			stopCapture();
+		}
+	}
+
+	void
+	setDimensions (uint32_t width, uint32_t height)
+	{
+		cout << "Getting current format...\n";
+		struct v4l2_format fmt_get = {0};
+		fmt_get.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+		if (xioctl(device->fd, VIDIOC_G_FMT, &fmt_get) == -1) {
+			THROW_ERROR("Unable to get the current image format: " << strerror(errno));
+		} else {
+			printf("Current image format:\n"
+		       	   "\twidth:        %d\n"
+		       	   "\theight:       %d\n"
+		       	   "\tpixelformat:  %c%c%c%c\n"
+		       	   "\tfield:        %d\n"
+		       	   "\tbytesperline: %d\n"
+		       	   "\tsizeimage:    %d\n"
+		       	   "\tcolorspace:   %d\n"
+		       	   "\tpriv:         %d\n",
+		       	   fmt_get.fmt.pix.width,
+		       	   fmt_get.fmt.pix.height,
+		       	   (fmt_get.fmt.pix.pixelformat >>  0 ) & 0xff,
+		       	   (fmt_get.fmt.pix.pixelformat >>  8 ) & 0xff,
+		       	   (fmt_get.fmt.pix.pixelformat >> 16 ) & 0xff,
+		       	   (fmt_get.fmt.pix.pixelformat >> 24 ) & 0xff,
+		       	   fmt_get.fmt.pix.field,
+		       	   fmt_get.fmt.pix.bytesperline,
+		       	   fmt_get.fmt.pix.sizeimage,
+		       	   fmt_get.fmt.pix.colorspace,
+		       	   fmt_get.fmt.pix.priv
+			);
+		}
+
+		fmt_get.fmt.pix.width = width;
+		fmt_get.fmt.pix.height = height;
+		cout << "Setting dimensions to " << fmt_get.fmt.pix.width
+		     << "x" << fmt_get.fmt.pix.height << "px...\n";
+		if (xioctl(device->fd, VIDIOC_S_FMT, &fmt_get) == -1) {
+			THROW_ERROR("Unable to set new image size: " << strerror(errno));
+		}
+	}
+
+	vector<uint32_t>
+	getDimensions ()
+	{
+		struct v4l2_format fmt_get = {0};
+		fmt_get.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+		if (xioctl(device->fd, VIDIOC_G_FMT, &fmt_get) == -1) {
+			THROW_ERROR("Unable to get the current image format: " << strerror(errno));
+		}
+
+		return vector<uint32_t>({ fmt_get.fmt.pix.width, fmt_get.fmt.pix.height });
+	}
+
+	uint32_t
+	getImageFormat ()
+	{
+		struct v4l2_format fmt_get = {0};
+		fmt_get.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+		if (xioctl(device->fd, VIDIOC_G_FMT, &fmt_get) == -1) {
+			THROW_ERROR("Unable to get the current image format: " << strerror(errno));
+		}
+
+		return fmt_get.fmt.pix.pixelformat;
+	}
+
+	void
+	displayInfo ()
+	{
+		printf("Information on webcam %s:\n", device->filename.c_str());
+
+		// Display general information
+		struct v4l2_capability caps = {0};
+		if (xioctl(device->fd, VIDIOC_QUERYCAP, &caps) == -1) {
+			THROW_ERROR("Error querying capabilities: " << strerror(errno));
+		}
+
+		printf("Capabilities:\n"
+	       	   "\tdriver:       %s\n"
+	       	   "\tcard:         %s\n"
+	       	   "\tbus_info:     %s\n"
+	       	   "\tversion:      %u.%u.%u\n"
+	       	   "\tcapabilities: 0x%x\n"
+	       	   "%s"
+	       	   "\tdevice_caps:  0x%x\n",
+	       	   caps.driver,
+	       	   caps.card,
+	       	   caps.bus_info,
+	       	   (caps.version >> 16) & 0xff,
+	       	   (caps.version >>  8) & 0xff,
+	        	caps.version        & 0xff,
+	       	   caps.capabilities,
+	       	   v4l2_cap_flags(caps.capabilities).c_str(),
+	       	   caps.device_caps
+		);
+
+		// Query all input devices
+		cout << "Supported inputs on device:\n";
+		for (int index = 0; index < 10; index++) {
+
+			struct v4l2_input input;
+
+			// Clear buffer
+			memset(&input, 0, sizeof(v4l2_input));
+
+			input.index = index;
+
+			ioctl(device->fd, VIDIOC_ENUMINPUT, &input);
+
+			if (errno == EINVAL) {
+				cout << "... and there are no more inputs.\n";
+				break;
+			} else if (errno > 0) {
+				THROW_ERROR("Error while enumerating inputs: " << strerror(errno));
+			} else {
+				printf("%d: '%s'\n"
+			       	   "\ttype:                %u (%s)\n"
+			       	   "\taudioset:            0x%x\n"
+			       	   "\ttuner:               %u\n"
+			       	   "\tsupported format(s): 0x%llx (%s)\n"
+			       	   "\tstatus:              %u ( %s%s%s)\n",
+			       	   index,
+			       	   input.name,
+			       	   input.type,
+			       	   ( input.type == V4L2_INPUT_TYPE_TUNER ? "tuner" :
+			         	 input.type == V4L2_INPUT_TYPE_CAMERA ? "camera" :
+			         	 "unknown"
+			       	   ),
+			       	   input.audioset,
+			       	   input.tuner,
+			       	   input.std, v4l2_std_flags(input.std).c_str(),
+			       	   input.status,
+			       	   ( input.status == V4L2_IN_ST_NO_POWER ? "no power " : ""),
+			       	   ( input.status == V4L2_IN_ST_NO_COLOR ? "no color " : ""),
+			       	   ( input.status == V4L2_IN_ST_NO_SIGNAL ? "no signal " : "")
+				);
+				if (input.std == 0) {
+					cout << "\tYeah, no supported formats. :(\n";
+				} else {
+					cout << " !! Wait, there are supported formats; you just can't see them!\n";
+				}
+			}
+		}
+
+		// Display current image format
+		struct v4l2_format fmt_get = {0};
+		fmt_get.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+		cout << "Getting current format...\n";
+		if (xioctl(device->fd, VIDIOC_G_FMT, &fmt_get) == -1) {
+			THROW_ERROR("Unable to get the current image format: " << strerror(errno));
+		} else {
+			printf("Current image format:\n"
+		       	   "\twidth:        %d\n"
+		       	   "\theight:       %d\n"
+		       	   "\tpixelformat:  %c%c%c%c\n"
+		       	   "\tfield:        %d\n"
+		       	   "\tbytesperline: %d\n"
+		       	   "\tsizeimage:    %d\n"
+		       	   "\tcolorspace:   %d\n"
+		       	   "\tpriv:         %d\n",
+		       	   fmt_get.fmt.pix.width,
+		       	   fmt_get.fmt.pix.height,
+		       	   (fmt_get.fmt.pix.pixelformat >>  0 ) & 0xff,
+		       	   (fmt_get.fmt.pix.pixelformat >>  8 ) & 0xff,
+		       	   (fmt_get.fmt.pix.pixelformat >> 16 ) & 0xff,
+		       	   (fmt_get.fmt.pix.pixelformat >> 24 ) & 0xff,
+		       	   fmt_get.fmt.pix.field,
+		       	   fmt_get.fmt.pix.bytesperline,
+		       	   fmt_get.fmt.pix.sizeimage,
+		       	   fmt_get.fmt.pix.colorspace,
+		       	   fmt_get.fmt.pix.priv
+			);
+		}
+	}
+
+	void
+	startCapture ()
+	{
+		struct v4l2_requestbuffers req = {0};
+		req.count = 2;
+		req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		req.memory = V4L2_MEMORY_MMAP;
+
+		cout << "Requesting " << req.count << " frame buffers...\n";
+		xioctl(device->fd, VIDIOC_REQBUFS, &req);
+		if (errno == EINVAL) {
+			THROW_ERROR("Memory-map streaming is NOT supported.");
+		} else if (errno) {
+			THROW_ERROR("Error requesting buffer: " << strerror(errno));
+		} else {
+			cout << "\tMemory-map streaming IS supported.\n"
+			     << "\tBuffers allocated: " << req.count << "\n";
+		}
+
+		for (int i = 0; i < req.count; i++) {
+			framebuffers.push_back(shared_ptr<MappedBuffer>(new MappedBuffer(device->fd, i)));
+		}
+
+		// Code for multi-buffer streaming. I don't know how to do this, and so far
+		// I've been limited by the image sensor, so I figure two buffers are enough.
+/*		fd_set fds;
+		FD_ZERO(&fds);
+		for (int i = 0; i < req.count
+		FD_SET(device->fd, &fds);
+		struct timeval timeout = {0};
+		timeout.tv_sec = 2;
+		int r = select(device->fd+1, &fds, NULL, NULL, &timeout);
+		cout << "Waiting for frame...\n";
+		if (r == -1) {
+			cout << "Error waiting for frame\n";
+			return 1;
+		}
+
+		cout << "Retrieving frame...\n";
+		//if (xioctl(device->fd, VIDIOC_DQBUF, &data) == -1) {
+		if (xioctl(device->fd, VIDIOC_DQBUF, &framebuffers[0]->data) == -1) {
+			THROW_ERROR("Error retrieving frame: " << strerror(errno));
+		} else {
+			cout << "Frame retrieved.\n";
+		}
+		// */
+
+		cout << "Starting capture...\n";
+		if (xioctl(device->fd, VIDIOC_STREAMON, &(req.type))) {
+			THROW_ERROR("Error starting capture: " << strerror(errno));
+		}
+
+		capturing = true;
+
+		// Get the camera started on its first frame
+		currentBuffer = 0;
+		framebuffers[1 - currentBuffer]->enqueue();
+	}
+
+	void
+	stopCapture ()
+	{
+		// Tell the webcam to stop
+		cout << "Stopping capture...\n";
+		if (xioctl(device->fd, VIDIOC_STREAMOFF, &v4l2_buf_type_video_capture)) {
+			THROW_ERROR("Error stopping capture: " << strerror(errno));
+		}
+
+		// I suppose we should deallocate the framebuffers as well.
+		// Heck, the destrctors can take care of it. Just overwrite the
+		// array to break the reference.
+		framebuffers = vector< shared_ptr<MappedBuffer> >();
+
+		capturing = false;
+	}
+
+	shared_ptr<MappedBuffer>
+	getFrame() {
+		currentBuffer = 1 - currentBuffer;
+		framebuffers[currentBuffer]->dequeue();
+		framebuffers[1 - currentBuffer]->enqueue();
+		return framebuffers[0];
+	}
+};
+
+int
+main (int argc, char* args[]) {
+	int status;
+	int fd;
+
+	vector< shared_ptr<MappedBuffer> > framebuffers;
+	shared_ptr<Webcam> webcam;
+	shared_ptr<WebcamViewer> viewer;
+
+	try
+	{
+		string filename;
+		if (argc < 2) {
+			filename = DEFAULT_CAMERA;
+		} else {
+			filename = args[1];
+		}
+
+		webcam = shared_ptr<Webcam>(new Webcam(filename));
+
+		//webcam.setDimensions(352, 288);
+		webcam->setDimensions(640, 480);
+
+		vector<uint32_t> dimensions = webcam->getDimensions();
+		cout << "Dimensions are now " << dimensions[0] << "x" << dimensions[1] << "px.\n";
+
+		webcam->startCapture();
+
+		viewer = shared_ptr<WebcamViewer>(new WebcamViewer(
+			dimensions[0],
+			dimensions[1],
+			"Yay, webcam! - " + filename,
+			v4l2sdl_fmt(webcam->getImageFormat())
+		));
+
+		// For FPS calculation
+		timeval then, now;
+
+		// Set the FPS timer
+		gettimeofday(&then, NULL);
+
+		while(1)
+		{
+			shared_ptr<MappedBuffer> frame = webcam->getFrame();
+			viewer->showFrame(frame->data, frame->length);
+
+			gettimeofday(&now, NULL);
+			int dt = (now.tv_sec - then.tv_sec) * 1000000 + (now.tv_usec-then.tv_usec);
+			printf("Framerate: %.2f fps\n", (1000000.0 / dt));
+			then = now;
+
+			// Check for termination. (This throws an exception when that happens.)
+			viewer->checkEvents();
+		}
+	}
+	catch (QuitEventException e)
+	{
+		cerr << e.what() << "\nQuitting...";
+		return 0;
+	}
+	catch (runtime_error e)
+	{
+		cerr << "!! Exception thrown: " << e.what() << "\n";
+		return 1;
+	}
+
+	return 0;
+}
+

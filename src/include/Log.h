@@ -1,19 +1,27 @@
-
+#include <iostream>
+#include <sstream>
 
 #define THROW_ERROR(error) \
-	stringstream err_ss; \
+	std::stringstream err_ss; \
 	err_ss << __FUNCTION__ << ":" << __LINE__ << " " << error;\
-	throw runtime_error(err_ss.str())
+	throw std::runtime_error(err_ss.str())
 
 //#define TRACE_ON
+#define MESSAGE_ON
+#define WARNING_ON
+#define ERROR_ON
+
+#define LOG_TEMPLATE(level, x) \
+	std::cerr << std::dec << "[" level "] " << __FILE__ << ":" << __LINE__ << ":" << __FUNCTION__ << " " << x << std::endl;
+
 #ifdef TRACE_ON
 # define IF_TRACE(statement) statement
 # define TRACE(x) \
-	cout << __FUNCTION__ << ":" << __LINE__ << " " << x << "\n"
+	LOG_TEMPLATE(" TRACE ", x)
 # define TRACE_ENTER \
-	cout << "-- Trace -- Entering " << __FUNCTION__
+	TRACE("Entering")
 # define TRACE_EXIT \
-	cout << "-- Trace -- Exiting " << __FUNCTION__
+	TRACE("Exiting")
 #else
 # define IF_TRACE(statement)
 # define TRACE(x)
@@ -21,4 +29,24 @@
 # define TRACE_EXIT
 #endif
 
+#ifdef MESSAGE_ON
+# define MESSAGE(x) \
+	LOG_TEMPLATE("MESSAGE", x)
+#else
+# define MESSAGE(x)
+#endif
+
+#ifdef WARNING_ON
+# define WARNING(x) \
+	LOG_TEMPLATE("WARNING", x)
+#else
+# define WARNING(x)
+#endif
+
+#ifdef ERROR_ON
+# define ERROR(x) \
+	LOG_TEMPLATE(" ERROR ", x)
+#else
+# define ERROR(x)
+#endif
 

@@ -12,6 +12,7 @@ clean:
 	rm -f *.o
 
 $(OBJECTS): %.o: %.cpp
+	######################################################################
 	$(CXX) $(FLAGS) $(INCLUDES) -c $^ -o $@
 
 
@@ -22,6 +23,18 @@ headlesswebcam: headlesswebcam.cpp Webcam.o
 	$(CXX) $(FLAGS) $^ -o $(BINDIR)/$@
 
 sockets_demo: sockets_demo.cpp Sockets.o
+	$(CXX) $(FLAGS) $^ -o $(BINDIR)/$@ -lpthread
+
+thread_demo: thread_demo.cpp
+	######################################################################
+	$(CXX) $(FLAGS) $^ -o $(BINDIR)/$@ -lpthread
+
+chat_server: chat_server.cpp Sockets.cpp
+	######################################################################
+	$(CXX) $(FLAGS) $^ -o $(BINDIR)/$@ -lpthread
+
+chat_client: chat_client.cpp Sockets.cpp
+	######################################################################
 	$(CXX) $(FLAGS) $^ -o $(BINDIR)/$@ -lpthread
 
 

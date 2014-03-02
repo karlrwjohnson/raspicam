@@ -13,11 +13,54 @@
 
 using namespace std;
 
-const in_port_t DEFAULT_PORT = 32123;
-
 class WebcamServer: public Server
 {
+  private:
 	shared_ptr<Webcam> webcam;
+
+	pthread_t streamerHandle;
+
+	pthread_t webcamMutex;
+
+	/** Flag to tell the streamer thread to stop sending frames and return. **/
+	bool streamerThreadKeepGoing;
+
+	/** Flag so _stopStream() doesn't throw an exception during the destructor. **/
+	bool nowDestructing;
+
+	void *
+	_streamerThread ()
+	{
+		TRACE_ENTER;
+		try
+		{
+			while (streamerThreadKeepGoing)
+			{
+				MutexLock lock(webcamMutex);
+				shared_ptr<MappedBuffer> frame = webcam->getFrame();
+				lock.unlock();
+
+				sendMessage(MSG_TYPE_FRAME, frame->length, frame->data);
+			}
+
+			return NULL;
+		}
+		catch (runtime_error e)
+		{
+			cerr << "!! Caught exception in reader thread:" << endl
+			     << "!! " << e.what() << endl;
+			return NULL;
+		}
+	}
+
+	void *
+	_streamerThreadCaller (void *webcamServerObject)
+	{
+		TRACE_ENTER;
+		void *retval = static_cast<WebcamServer*>(webcamServerObject)->_streamerThread();
+		TRACE_EXIT;
+		return retval;
+	}
 
   protected:
 	virtual void
@@ -29,7 +72,19 @@ class WebcamServer: public Server
 
 		switch (messageType)
 		{
+			case MSG_TYPE_QUERY_STREAM_STATUS:
+				MESSAGE("Message received: MSG_TYPE_QUERY_STREAM_STATUS");
+
+				if (streamerThreadKeepGoing)
+					sendMessage(MSG_TYPE_STREAM_IS_STARTED);
+				else
+					sendMessage(MSG_TYPE_STREAM_IS_STOPPED);
+
+				break;
+
 			case MSG_TYPE_QUERY_IMAGE_INFO:
+				MESSAGE("Message received: MSG_TYPE_QUERY_IMAGE_INFO");
+
 				dimensions = webcam->getDimensions();
 				image_info.width = dimensions[0];
 				image_info.height = dimensions[1];
@@ -40,23 +95,90 @@ class WebcamServer: public Server
 				break;
 
 			case MSG_TYPE_START_STREAM:
+				MESSAGE("Message received: MSG_TYPE_START_STREAM");
+				_startStream();
+				sendMessage(MSG_TYPE_STREAM_IS_STARTED); 
 				break;
 
 			case MSG_TYPE_PAUSE_STREAM:
+				MESSAGE("Message received: MSG_TYPE_PAUSE_STREAM");
+				_stopStream();
+				sendMessage(MSG_TYPE_STREAM_IS_STOPPED);
 				break;
 
 			default:
-				cerr << "Server: Received unhandled message type " << messageType << endl;
+				MESSAGE("Message received: Unhandled message type " << messageType);
 				break;
 		}
 	}
 
   public:
 	WebcamServer(int port, string devicename) :
-		Server(port)
+		Server(port),
+		streamerThreadKeepGoing(false),
+		destructing(false)
 	{
+		int err;
+		
+		TRACE("Creating webcam mutex...");
+		if((err = pthread_mutex_init(&webcamMutex, NULL))) {
+			THROW_ERROR("Error creating webcam mutex: " << strerror(err));
+		}
+
 		webcam = shared_ptr<Webcam>(new Webcam(devicename));
 	}
+
+	~WebcamServer()
+	{
+		nowDestructing = true;
+		_stopStream();
+	}
+
+	startStream ()
+	{
+		if (!streamerThreadKeepGoing)
+		{
+			MESSAGE("Starting stream");
+
+			streamerThreadKeepGoing = true;
+
+			int err = pthread_create(&streamerHandle, NULL, _streamerThreadCaller, this);
+			if (err)
+			{
+				THROW_ERROR("Unable to start streamer thread: " << strerror(err));
+			}
+		}
+		else
+		{
+			MESSAGE("Stream is already started");
+		}
+	}
+
+	stopStream()
+	{
+		if (streamerThreadKeepGoing)
+		{
+			MESSAGE("Stopping stream");
+
+			// Allow the streamer thread to end itself naturally
+			streamerThreadKeepGoing = false;
+
+			int err = pthread_join(streamerHandle, NULL);
+			if (err)
+			{
+				if (nowDestructing) {
+					WARNING("Unable to terminate streamer thread: " << strerror(err));
+				} else {
+					THROW_ERROR("Unable to terminate streamer thread: " << strerror(err));
+				}
+			}
+		}
+		else
+		{
+			MESSAGE("Stream is already stopped");
+		}
+	}
+
 };
 
 void
@@ -83,9 +205,8 @@ main (int argc, char* args[]) {
 
 		shared_ptr<EchoServer> server(new EchoServer(port));
 
-		// Wait for manual termination
-		cout << "Press enter to end." << endl;
-		getchar();
+		// Wait for server to terminate
+		server->joinReaderThread();
 
 		return 0;
 

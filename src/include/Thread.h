@@ -1,5 +1,9 @@
+#ifndef THREAD_H
+#define THREAD_H
+
 #include <pthread.h>
 #include <stdexcept>
+#include <string.h>  // strerror
 #include "Log.h"
 
 template < class Class, class ArgumentType >
@@ -129,3 +133,6 @@ pthread_create_using_method
 //{
 //	int err = pthread_join(&handle
 //}
+
+#endif // THREAD_H
+

@@ -1,3 +1,5 @@
+#ifndef SOCKETS_H
+#define SOCKETS_H
 
 #include <arpa/inet.h>  // inet_pton
 #include <netinet/in.h> // in_addr_t, in_port_t
@@ -80,7 +82,7 @@ class Connection {
 	 * Not actually a set because apparently sets require their contents
 	 * to be sortable, and functions don't implement the "<" operator.
 	 */
-	typedef std::list< message_handler_t* > message_handler_set;
+	typedef std::list< const message_handler_t* > message_handler_set;
 
 	/// A mapping between a message type and the set of functions to process it
 	typedef std::map< message_t, message_handler_set > message_handler_map;
@@ -94,7 +96,7 @@ class Connection {
   protected:
 
 	/// Sample message handler to notify the user about unhandled messages
-	message_handler_t handleDefault =
+	const message_handler_t handleDefault =
 		[this] (message_t type, message_len_t length, void*buffer)
 	{
 		TRACE_ENTER;
@@ -151,6 +153,25 @@ class Connection {
 	void
 	sendMessage (message_t type, size_t length, void* data);
 
+	/**
+	 * Wrapper that calls sendMessage(message_t, size_t, void*) on a string
+	 * buffer. This only simplifies the sending process; the string shows up
+	 * on the other side as raw binary data.
+	 *
+	 * @param type    Integer indicating the type of the message
+	 * @param data    Data to send
+	 */
+	void
+	sendMessage (message_t type, std::string data);
+
+	/**
+	 * Wrapper that calls sendMessage(message_t, size_t, void*) with no data.
+	 *
+	 * @param type    Integer indicating the type of the message
+	 */
+	void
+	sendMessage (message_t type);
+
   protected:
 
 	/**
@@ -168,7 +189,7 @@ class Connection {
 	 * @param handler  Function to run each time that type of message is received
 	 */
 	void
-	addMessageHandler (message_t type, message_handler_t& handler);
+	addMessageHandler (message_t type, const message_handler_t& handler);
 
 	/**
 	 * Registers a function to process messages for which no handler has been
@@ -180,7 +201,7 @@ class Connection {
 	 * @param handler  Function to run each time an unhandled message arrives
 	 */
 	void
-	addDefaultMessageHandler (message_handler_t& handler);
+	addDefaultMessageHandler (const message_handler_t& handler);
 
 	/**
 	 * Unregisters a function previously registered with a corresponding call to
@@ -192,7 +213,7 @@ class Connection {
 	 * @param handler  Function to run each time that type of message is received
 	 */
 	void
-	removeMessageHandler (message_t type, message_handler_t& handler);
+	removeMessageHandler (message_t type, const message_handler_t& handler);
 
 	/**
 	 * Unregisters a function previously registered with a corresponding call to
@@ -204,7 +225,7 @@ class Connection {
 	 * @param handler  Function to run each time that type of message is received
 	 */
 	void
-	removeDefaultMessageHandler (message_handler_t& handler);
+	removeDefaultMessageHandler (const message_handler_t& handler);
 
   private:
 
@@ -297,4 +318,6 @@ class Client
 	std::shared_ptr<Connection>
 	connect (std::string ipAddress, in_port_t port);
 };
+
+#endif // SOCKETS_H
 

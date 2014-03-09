@@ -3,7 +3,7 @@ CXX = g++
 FLAGS = --std=c++0x -g -I ./include/
 BINDIR = ../bin
 
-OBJECTS := Sockets.o Webcam.o WebcamViewer.o
+OBJECTS := Sockets.o Webcam.o WebcamViewer.o WebcamServer.o
 
 
 .PHONY: clean
@@ -20,6 +20,9 @@ yaywebcam: yaywebcam.cpp Webcam.o WebcamViewer.o
 	$(CXX) $(FLAGS) $^ -o $(BINDIR)/$@ -lSDL2
 
 headlesswebcam: headlesswebcam.cpp Webcam.o
+	$(CXX) $(FLAGS) $^ -o $(BINDIR)/$@
+
+webcaminfo: webcaminfo.cpp Webcam.o
 	$(CXX) $(FLAGS) $^ -o $(BINDIR)/$@
 
 sockets_demo: sockets_demo.cpp Sockets.o

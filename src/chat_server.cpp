@@ -10,7 +10,7 @@ using namespace std;
 
 class ChatServerConnection: public Connection
 {
-	message_handler_t handleHello =
+	const message_handler_t handleHello =
 		[this] (message_t type, message_len_t length, void* buffer)
 	{
 		TRACE_ENTER;
@@ -18,7 +18,7 @@ class ChatServerConnection: public Connection
 		TRACE_EXIT;
 	};
 
-	message_handler_t handleMessage =
+	const message_handler_t handleMessage =
 		[this] (message_t type, message_len_t length, void* buffer)
 	{
 		TRACE_ENTER;

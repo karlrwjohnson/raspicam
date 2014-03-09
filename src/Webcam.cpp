@@ -141,7 +141,7 @@ xioctl (int fd, int request, void *arg) {
 			fd = 0;
 			THROW_ERROR("Error opening " << filename << ": " << strerror(errno));
 		} else {
-			cout << "Opened device " << filename << " as file descriptor " << fd << "\n";
+			TRACE("Opened device " << filename << " as file descriptor " << fd);
 		}
 	}
 
@@ -163,7 +163,7 @@ xioctl (int fd, int request, void *arg) {
 		_buffer.memory = V4L2_MEMORY_MMAP;
 		_buffer.index = index;
 
-		cout << "Getting information on frame buffer " << index << "...\n";
+		TRACE("Getting information on frame buffer " << index);
 		if (xioctl(fd, VIDIOC_QUERYBUF, &_buffer)) {
 			THROW_ERROR("Error getting information on buffer " << index << ": " << strerror(errno));
 		}
@@ -180,7 +180,7 @@ xioctl (int fd, int request, void *arg) {
 	{
 		if (data != NULL)
 		{
-			cout << "Unmapping buffer " << index << "\n";
+			TRACE("Unmapping buffer " << index)
 			munmap(data, length);
 			data = NULL;
 		}
@@ -189,7 +189,7 @@ xioctl (int fd, int request, void *arg) {
 	void
 	MappedBuffer::enqueue ()
 	{
-		cout << "Enqueing buffer " << index << "\n";
+		TRACE("Enqueing buffer " << index);
 		if (xioctl(fd, VIDIOC_QBUF, &_buffer)) {
 			THROW_ERROR("Error enqueing buffer " << index << ": " << strerror(errno));
 		}
@@ -198,11 +198,11 @@ xioctl (int fd, int request, void *arg) {
 	void
 	MappedBuffer::dequeue()
 	{
-		cout << "Retrieving frame from buffer " << index << "\n";
-		if (xioctl(fd, VIDIOC_DQBUF, &_buffer) == -1) {
+		TRACE("Retrieving frame from buffer " << index);
+		if (xioctl(fd, VIDIOC_DQBUF, &_buffer)) {
 			THROW_ERROR("Error retrieving frame from buffer " << index << ": " << strerror(errno));
 		} else {
-			cout << "Frame retrieved from buffer " << index << "\n";
+			TRACE("Frame retrieved from buffer " << index);
 		}
 	}
 
@@ -214,7 +214,7 @@ xioctl (int fd, int request, void *arg) {
 	{
 		int input_num = 0;
 		cout << "Selecting input " << input_num << "\n";
-		if (xioctl(device->fd, VIDIOC_S_INPUT, &input_num) == -1) {
+		if (xioctl(device->fd, VIDIOC_S_INPUT, &input_num)) {
 			THROW_ERROR("Error selecing input " << input_num << ": " << strerror(errno));
 		}
 	}
@@ -226,61 +226,44 @@ xioctl (int fd, int request, void *arg) {
 		}
 	}
 
-	void
-	Webcam::setDimensions (uint32_t width, uint32_t height)
+	string
+	Webcam::getFilename ()
 	{
-		cout << "Getting current format...\n";
-		struct v4l2_format fmt_get;
-        memset(&fmt_get, 0, sizeof(v4l2_format));
-		fmt_get.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-
-		if (xioctl(device->fd, VIDIOC_G_FMT, &fmt_get) == -1) {
-			THROW_ERROR("Unable to get the current image format: " << strerror(errno));
-		} else {
-			printf("Current image format:\n"
-		       	   "\twidth:        %d\n"
-		       	   "\theight:       %d\n"
-		       	   "\tpixelformat:  %c%c%c%c\n"
-		       	   "\tfield:        %d\n"
-		       	   "\tbytesperline: %d\n"
-		       	   "\tsizeimage:    %d\n"
-		       	   "\tcolorspace:   %d\n"
-		       	   "\tpriv:         %d\n",
-		       	   fmt_get.fmt.pix.width,
-		       	   fmt_get.fmt.pix.height,
-		       	   (fmt_get.fmt.pix.pixelformat >>  0 ) & 0xff,
-		       	   (fmt_get.fmt.pix.pixelformat >>  8 ) & 0xff,
-		       	   (fmt_get.fmt.pix.pixelformat >> 16 ) & 0xff,
-		       	   (fmt_get.fmt.pix.pixelformat >> 24 ) & 0xff,
-		       	   fmt_get.fmt.pix.field,
-		       	   fmt_get.fmt.pix.bytesperline,
-		       	   fmt_get.fmt.pix.sizeimage,
-		       	   fmt_get.fmt.pix.colorspace,
-		       	   fmt_get.fmt.pix.priv
-			);
-		}
-
-		fmt_get.fmt.pix.width = width;
-		fmt_get.fmt.pix.height = height;
-		cout << "Setting dimensions to " << fmt_get.fmt.pix.width
-		     << "x" << fmt_get.fmt.pix.height << "px...\n";
-		if (xioctl(device->fd, VIDIOC_S_FMT, &fmt_get) == -1) {
-			THROW_ERROR("Unable to set new image size: " << strerror(errno));
-		}
+		return device.filename;
 	}
 
-	vector<uint32_t>
-	Webcam::getDimensions ()
+	shared_ptr<Webcam::fmtdesc_v>
+	Webcam::getSupportedFormats ()
 	{
-		struct v4l2_format fmt_get;
-        memset(&fmt_get, 0, sizeof(v4l2_format));
-		fmt_get.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		TRACE("Getting list of supported formats...");
 
-		if (xioctl(device->fd, VIDIOC_G_FMT, &fmt_get) == -1) {
-			THROW_ERROR("Unable to get the current image format: " << strerror(errno));
+		shared_ptr<fmtdesc_v> ret = shared_ptr<fmtdesc_v>( new fmtdesc_v() );
+
+		for (int i = 0; ; i++)
+		{
+			struct v4l2_fmtdesc formatDesc;
+			memset(&formatDesc, 0, sizeof(formatDesc));
+			formatDesc.index = i;
+			formatDesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+			int code = xioctl(device->fd, VIDIOC_ENUM_FMT, &formatDesc);
+			if (code && errno == EINVAL)
+			{
+				TRACE("Driver reports no more than " << i << " supported formats");
+				break;
+			}
+			else if (code)
+			{
+				THROW_ERROR("Unable to get list of supported formats from driver: "
+				         << strerror(errno));
+			}
+			else
+			{
+				ret->push_back(formatDesc);
+			}
 		}
 
-		return vector<uint32_t>({ fmt_get.fmt.pix.width, fmt_get.fmt.pix.height });
+		return ret;
 	}
 
 	uint32_t
@@ -290,11 +273,128 @@ xioctl (int fd, int request, void *arg) {
         memset(&fmt_get, 0, sizeof(v4l2_format));
 		fmt_get.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-		if (xioctl(device->fd, VIDIOC_G_FMT, &fmt_get) == -1) {
+		if (xioctl(device->fd, VIDIOC_G_FMT, &fmt_get)) {
 			THROW_ERROR("Unable to get the current image format: " << strerror(errno));
 		}
 
 		return fmt_get.fmt.pix.pixelformat;
+	}
+
+	void
+	Webcam::setImageFormat (video_fmt_enum_t fmt, uint32_t width, uint32_t height)
+	{
+		TRACE("Getting previous format information");
+
+		struct v4l2_format format;
+        memset(&format, 0, sizeof(v4l2_format));
+		format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+		if (xioctl(device->fd, VIDIOC_G_FMT, &format)) {
+			THROW_ERROR("Unable to get the current image format: "
+			         << strerror(errno));
+		}
+
+		TRACE("Setting image format and resolution to " fmt2string(fmt) << ", "
+		   << width << "x" << height << "px");
+		format.fmt.pix.width = width;
+		format.fmt.pix.height = height;
+		format.fmt.pix.pixelformat = fmt;
+		if (xioctl(device->fd, VIDIOC_S_FMT, &format)) {
+			THROW_ERROR("Unable to set new image format and resolution to "
+			         << fmt2string(fmt) << ", " << width << "x" << height << "px: "
+			         << strerror(errno));
+		}
+	}
+
+	void
+	Webcam::setImageFormat (video_fmt_enum_t fmt, resolution_t res)
+	{
+		setImageFormat(fmt, res.first, res.second);
+	}
+
+	shared_ptr<Webcam::resolution_set>
+	Webcam::getSupportedResolutions (Webcam::video_fmt_enum_t format)
+	{
+		TRACE("Getting list of supported resolutions...");
+
+		shared_ptr<resolution_set> ret = shared_ptr<resolution_set>( new resolution_set() );
+
+		for (int i = 0; ; i++)
+		{
+			struct v4l2_frmsizeenum resolution;
+			memset(&resolution, 0, sizeof(resolution));
+			resolution.index = i;
+			resolution.pixel_format = format;
+
+			int code = xioctl(device->fd, VIDIOC_ENUM_FRAMESIZES, &resolution);
+			if (code && errno == EINVAL)
+			{
+				TRACE("Driver reports no more than " << i << " supported resolutions");
+				break;
+			}
+			else if (code)
+			{
+				THROW_ERROR("Unable to get list of supported formats from driver: "
+				         << strerror(errno));
+			}
+			else if (resolution.type == V4L2_FRMSIZE_TYPE_STEPWISE ||
+			         resolution.type == V4L2_FRMSIZE_TYPE_CONTINUOUS)
+			{
+				THROW_ERROR("Driver reports that the camera supports a "
+				            "step-wise or continuous range of resolutions. "
+				            "I don't want to support that right now.");
+			}
+			else
+			{
+				ret->push_back(resolution_t(resolution.discrete.width,
+				                            resolution.discrete.height));
+			}
+		}
+
+		return ret;
+	}
+
+	Webcam::resolution_t
+	Webcam::getResolution ()
+	{
+		struct v4l2_format fmt_get;
+        memset(&fmt_get, 0, sizeof(v4l2_format));
+		fmt_get.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+		if (xioctl(device->fd, VIDIOC_G_FMT, &fmt_get)) {
+			THROW_ERROR("Unable to get the current image format: " << strerror(errno));
+		}
+
+		return resolution_t(fmt_get.fmt.pix.width, fmt_get.fmt.pix.height);
+	}
+
+	void
+	Webcam::setResolution (uint32_t width, uint32_t height)
+	{
+		TRACE("Getting previous format information");
+
+		struct v4l2_format format;
+        memset(&format, 0, sizeof(v4l2_format));
+		format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+		if (xioctl(device->fd, VIDIOC_G_FMT, &format)) {
+			THROW_ERROR("Unable to get the current image format: "
+			         << strerror(errno));
+		}
+
+		TRACE("Setting dimensions to " << width << "x" << height << "px");
+		format.fmt.pix.width = width;
+		format.fmt.pix.height = height;
+		if (xioctl(device->fd, VIDIOC_S_FMT, &format)) {
+			THROW_ERROR("Unable to set new image size to " << width << "x"
+			         << height << "px: " << strerror(errno));
+		}
+	}
+
+	void
+	Webcam::setResolution (resolution_t res)
+	{
+		setResolution(res.first, res.second);
 	}
 
 	void
@@ -304,7 +404,7 @@ xioctl (int fd, int request, void *arg) {
 
 		// Display general information
 		struct v4l2_capability caps = {0};
-		if (xioctl(device->fd, VIDIOC_QUERYCAP, &caps) == -1) {
+		if (xioctl(device->fd, VIDIOC_QUERYCAP, &caps)) {
 			THROW_ERROR("Error querying capabilities: " << strerror(errno));
 		}
 
@@ -381,7 +481,7 @@ xioctl (int fd, int request, void *arg) {
 		fmt_get.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
 		cout << "Getting current format...\n";
-		if (xioctl(device->fd, VIDIOC_G_FMT, &fmt_get) == -1) {
+		if (xioctl(device->fd, VIDIOC_G_FMT, &fmt_get)) {
 			THROW_ERROR("Unable to get the current image format: " << strerror(errno));
 		} else {
 			printf("Current image format:\n"
@@ -447,8 +547,8 @@ xioctl (int fd, int request, void *arg) {
 		}
 
 		cout << "Retrieving frame...\n";
-		//if (xioctl(device->fd, VIDIOC_DQBUF, &data) == -1) {
-		if (xioctl(device->fd, VIDIOC_DQBUF, &framebuffers[0]->data) == -1) {
+		//if (xioctl(device->fd, VIDIOC_DQBUF, &data)) {
+		if (xioctl(device->fd, VIDIOC_DQBUF, &framebuffers[0]->data)) {
 			THROW_ERROR("Error retrieving frame: " << strerror(errno));
 		} else {
 			cout << "Frame retrieved.\n";
@@ -492,4 +592,15 @@ xioctl (int fd, int request, void *arg) {
 		return framebuffers[0];
 	}
 
+	string
+	Webcam::fmt2string (video_fmt_enum_t fmt)
+	{
+		char ret[4] = {
+			( fmt >>  0 ) & 0xff,
+			( fmt >>  8 ) & 0xff,
+			( fmt >> 16 ) & 0xff,
+			( fmt >> 24 ) & 0xff
+		}
+		return ret;
+	}
 

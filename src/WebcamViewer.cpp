@@ -5,33 +5,41 @@
 #include <sstream>
 #include <string>
 
-#include "WebcamViewer.h"
 #include "Log.h"
+#include "WebcamViewer.h"
 
 #include <linux/videodev2.h>
 
 using namespace std;
 
 /**
- * Global flag for what really should be a singleton.
+ * Global flag ensuring that only one instance of WebcamViewer is instantiated.
  *
  * I don't think SDL lets you start up multiple instances, but I wanted to
  * wrap it in an object so I could use the destructor to take things down
  * gracefully when it went out of scope.
  *
- * Did I mention the program officially terminates by throwing an exception?
+ * Using a singleton might have been more appropriate.
  */
 bool initiated = false;
 
-WebcamViewer::WebcamViewer(int width, int height, string title, int imageFormat)
+WebcamViewer::WebcamViewer(
+		uint32_t width_,
+		uint32_t height_,
+		string title,
+		Webcam::video_fmt_enum_t v4lImageFormat
+):
+	width  (width_),
+	height (height_)
 {
-	TRACE("enter");
+	TRACE_ENTER;
 
 	if(initiated) {
 		THROW_ERROR("Cannot start multiple instances of SDL, and by extension, WebcamViewer.");
 	}
 
-	TRACE("\tstarting SDL");
+	// Attempt to convert the format right away
+	sdlImageFormat = v4l2sdl_fmt(v4lImageFormat);
 
 	//if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
 	if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS) != 0) {
@@ -50,17 +58,12 @@ WebcamViewer::WebcamViewer(int width, int height, string title, int imageFormat)
 		THROW_ERROR("SDL_CreateRenderer Error: " << SDL_GetError());
 	}
 
-	canvaswidth = width;
-	canvasheight = height;
-	TRACE("\tcanvasheight = " << height);
-	TRACE("\tcanvaswidth = " << width);
-
 	canvas = SDL_CreateTexture(
 		renderer,
-		v4l2sdl_fmt(imageFormat), // i.e. SDL_PIXELFORMAT_YUY2
+		sdlImageFormat,
 		SDL_TEXTUREACCESS_STREAMING,
-		canvaswidth,
-		canvasheight
+		width,
+		height
 	);
 	if (canvas == NULL)
 	{
@@ -69,12 +72,12 @@ WebcamViewer::WebcamViewer(int width, int height, string title, int imageFormat)
 
 	initiated = true;
 
-	TRACE("\texit");
+	TRACE_EXIT;
 }
 
 WebcamViewer::~WebcamViewer()
 {
-	TRACE(" enter");
+	TRACE_ENTER;
 
 	if(canvas) {
 		SDL_DestroyTexture(canvas);
@@ -95,7 +98,7 @@ WebcamViewer::~WebcamViewer()
 
 	initiated = false;
 
-	TRACE("\texit");
+	TRACE_EXIT;
 }
 
 void
@@ -110,32 +113,87 @@ WebcamViewer::checkEvents ()
 }
 
 void
-WebcamViewer::showFrame (void* imgdata, size_t datalength)
+WebcamViewer::setImageSize (uint32_t newWidth, uint32_t newHeight)
 {
-	TRACE("enter\n")
+	TRACE_ENTER;
 
-	if (!initiated)
-	{
-		THROW_ERROR("showimg_init() hasn't been called yet!");
+	SDL_Texture *newCanvas = SDL_CreateTexture(
+		renderer,
+		sdlImageFormat,
+		SDL_TEXTUREACCESS_STREAMING,
+		newWidth,
+		newHeight
+	);
+
+	if (newCanvas == NULL) {
+		THROW_ERROR("SDL_CreateTexture Error: " << SDL_GetError());
 	}
 
-	void* pixels;
-	int pitch;
-	if (SDL_LockTexture(canvas, NULL, &pixels, &pitch))
-	{
+	SDL_DestroyTexture(canvas);
+	canvas = newCanvas;
+
+	width = newWidth;
+	height = newHeight;
+
+	SDL_SetWindowSize(window, width, height);
+
+	TRACE_EXIT;
+}
+
+void
+WebcamViewer::setImageSize (Webcam::resolution_t size)
+{
+	setImageSize(size.first, size.second);
+}
+
+void
+WebcamViewer::setImageFormat (Webcam::video_fmt_enum_t v4lImageFormat)
+{
+	TRACE_ENTER;
+
+	uint32_t newFormat = v4l2sdl_fmt(v4lImageFormat);
+
+	SDL_Texture *newCanvas = SDL_CreateTexture(
+		renderer,
+		newFormat,
+		SDL_TEXTUREACCESS_STREAMING,
+		width,
+		height
+	);
+
+	if (newCanvas == NULL) {
+		THROW_ERROR("SDL_CreateTexture Error: " << SDL_GetError());
+	}
+
+	SDL_DestroyTexture(canvas);
+	canvas = newCanvas;
+
+	sdlImageFormat = newFormat;
+
+	TRACE_EXIT;
+}
+
+void
+WebcamViewer::showFrame (void* sourceBuffer, size_t sourceLength)
+{
+	TRACE_ENTER;
+
+	void* targetBuffer;
+	int   targetPitch;
+
+	if (SDL_LockTexture(canvas, NULL, &targetBuffer, &targetPitch)) {
 		THROW_ERROR("SDL_LockTexture Error: " << SDL_GetError());
 	}
 
-	if (datalength != canvasheight * pitch)
-	{
+	if (sourceLength != height * targetPitch) {
 		SDL_UnlockTexture(canvas);
-		THROW_ERROR("Image data size mismatch: Source buffer is " << datalength
-			<< " bytes; destination buffer is " << (canvasheight * pitch) << " bytes"
-			<< " (canvasheight=" << canvasheight << "; pitch = " << pitch << ")"
+		THROW_ERROR("Image data size mismatch: Source buffer is " << sourceLength
+			<< " bytes; destination buffer is " << (height * targetPitch) << " bytes"
+			<< " (image height = " << height << "; bytes/row = " << targetPitch << ")"
 		);
 	}
 
-	memcpy(pixels, imgdata, datalength);
+	memcpy(targetBuffer, sourceBuffer, sourceLength);
 
 	SDL_UnlockTexture(canvas);
 
@@ -143,20 +201,11 @@ WebcamViewer::showFrame (void* imgdata, size_t datalength)
 	SDL_RenderCopy(renderer, canvas, NULL, NULL);
 	SDL_RenderPresent(renderer);
 
-	TRACE("exit")
+	TRACE_EXIT;
 }
 
-/**
- * Conversion between Video4Linux and SDL image formats.
- * Hopefully, this will provide at least some resilience against hardware changes.
- * If the correct conversion can't be located, this throws an exception so the 
- * failure is detected nice and early.
- *
- * @param v4l2_fmt   A V4L2_PIX_FMT_* constant defined in videodev2.h
- * @return           Its corresponding SDL_PIXELFORMAT_* constant, if it exists
- */
 uint32_t
-v4l2sdl_fmt (uint32_t v4l2_fmt)
+WebcamViewer::v4l2sdl_fmt (Webcam::video_fmt_enum_t v4l2_fmt)
 {
   switch(v4l2_fmt) {
 
@@ -180,7 +229,8 @@ v4l2sdl_fmt (uint32_t v4l2_fmt)
 		     c1 = (char) ((v4l2_fmt >>  8) & 0xff),
 		     c2 = (char) ((v4l2_fmt >> 16) & 0xff),
 		     c3 = (char) ((v4l2_fmt >> 24) & 0xff);
-		THROW_ERROR("Unknown Video4Linux2 image format " << c0 << c1 << c2 << c3);
+		THROW_ERROR("Unknown or incompatible Video4Linux2 image format "
+		         << c0 << c1 << c2 << c3);
   }
 }
 

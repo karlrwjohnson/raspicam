@@ -9,34 +9,37 @@
 #include "webcam_stream_common.h"
 #include "Log.h"
 #include "Sockets.h"
+#include "Thread.h"
 #include "Webcam.h"
 
 using namespace std;
 
-class WebcamServer: public Server
+class WebcamServerConnection: public Connection
 {
   private:
 	shared_ptr<Webcam> webcam;
 
-	pthread_t streamerHandle;
+	pthread_t streamerThreadHandle;
 
 	pthread_t webcamMutex;
 
-	/** Flag to tell the streamer thread to stop sending frames and return. **/
-	bool streamerThreadKeepGoing;
+	/// Tells the streamer thread to stop sending frames and return.
+	bool streamIsActiveFlag;
 
-	/** Flag so _stopStream() doesn't throw an exception during the destructor. **/
-	bool nowDestructing;
+	/// Flag so methods know not to throw exceptions during the destructor
+	bool nowDestructingFlag;
 
 	void *
-	_streamerThread ()
+	streamerThread ()
 	{
 		TRACE_ENTER;
 		try
 		{
-			while (streamerThreadKeepGoing)
+			MutexLock lock(webcamMutex);
+
+			while (streamIsActiveFlag)
 			{
-				MutexLock lock(webcamMutex);
+				lock.relock();
 				shared_ptr<MappedBuffer> frame = webcam->getFrame();
 				lock.unlock();
 
@@ -53,79 +56,127 @@ class WebcamServer: public Server
 		}
 	}
 
-	void *
-	_streamerThreadCaller (void *webcamServerObject)
+	const message_handler_t handleQueryStreamStatus =
+		[this] (message_t type, message_len_t length, void* buffer)
 	{
 		TRACE_ENTER;
-		void *retval = static_cast<WebcamServer*>(webcamServerObject)->_streamerThread();
+		sendMessage(streamIsActiveFlag ?
+		            (MSG_TYPE_STREAM_IS_STARTED) :
+		            (MSG_TYPE_STREAM_IS_STOPPED) , 0, NULL);
 		TRACE_EXIT;
-		return retval;
-	}
+	};
 
-  protected:
-	virtual void
-	handleMessage (uint32_t messageType, uint32_t length, void* buffer)
+	const message_handler_t handleQueryImageFormat =
+		[this] (message_t type, message_len_t length, void* buffer)
 	{
-		string text;
+		TRACE_ENTER;
+
 		struct image_info imageInfo;
 		vector<uint32_t> dimensions;
 
-		switch (messageType)
-		{
-			case MSG_TYPE_QUERY_STREAM_STATUS:
-				MESSAGE("Message received: MSG_TYPE_QUERY_STREAM_STATUS");
+		MutexLock lock(webcamMutex);
+		lock.relock();
 
-				if (streamerThreadKeepGoing)
-					sendMessage(MSG_TYPE_STREAM_IS_STARTED);
-				else
-					sendMessage(MSG_TYPE_STREAM_IS_STOPPED);
+		dimensions = webcam->getDimensions();
+		image_info.fmt = getImageFormat();
+		image_info.width = dimensions[0];
+		image_info.height = dimensions[1];
 
-				break;
+		sendMessage(MSG_TYPE_IMAGE_FORMAT_RESPONSE, sizeof(imageInfo), &imageInfo);
 
-			case MSG_TYPE_QUERY_IMAGE_INFO:
-				MESSAGE("Message received: MSG_TYPE_QUERY_IMAGE_INFO");
+		TRACE_EXIT;
+	};
 
-				dimensions = webcam->getDimensions();
-				image_info.width = dimensions[0];
-				image_info.height = dimensions[1];
-				image_info.fmt = getImageFormat();
+	const message_handler_t handle_QUERY_SUPPORTED_FORMATS =
+		[this] (message_t type, message_len_t length, void* buffer)
+	{
+		TRACE_ENTER;
+		//TODO
+		sendMessage(MSG_TYPE_INTERNAL_ERROR, "This functionality is not yet implemented.");
+		TRACE_EXIT;
+	};
 
-				sendMessage(MSG_TYPE_IMAGE_INFO_RESPONSE, sizeof(imageInfo), &imageInfo);
+	const message_handler_t handle_USE_FORMAT =
+		[this] (message_t type, message_len_t length, void* buffer)
+	{
+		TRACE_ENTER;
+		//TODO
+		sendMessage(MSG_TYPE_INTERNAL_ERROR, "This functionality is not yet implemented.");
+		TRACE_EXIT;
+	};
 
-				break;
+	const message_handler_t handle_START_STREAM =
+		[this] (message_t type, message_len_t length, void* buffer)
+	{
+		TRACE_ENTER;
+		startStream();
+		TRACE_EXIT;
+	};
 
-			case MSG_TYPE_START_STREAM:
-				MESSAGE("Message received: MSG_TYPE_START_STREAM");
-				_startStream();
-				sendMessage(MSG_TYPE_STREAM_IS_STARTED); 
-				break;
+	const message_handler_t handle_PAUSE_STREAM =
+		[this] (message_t type, message_len_t length, void* buffer)
+	{
+		TRACE_ENTER;
+		stopStream();
+		TRACE_EXIT;
+	};
 
-			case MSG_TYPE_PAUSE_STREAM:
-				MESSAGE("Message received: MSG_TYPE_PAUSE_STREAM");
-				_stopStream();
-				sendMessage(MSG_TYPE_STREAM_IS_STOPPED);
-				break;
+	const message_handler_t handle_ERROR_INTERNAL =
+		[this] (message_t type, message_len_t length, void* buffer)
+	{
+		TRACE_ENTER;
+		ERROR("Client reports internal error: " << string(buffer, length));
+		TRACE_EXIT;
+	};
 
-			default:
-				MESSAGE("Message received: Unhandled message type " << messageType);
-				break;
-		}
-	}
+	const message_handler_t handle_ERROR_INVALID_MSG =
+		[this] (message_t type, message_len_t length, void* buffer)
+	{
+		TRACE_ENTER;
+		ERROR("Client reports invalid message.");
+		TRACE_EXIT;
+	};
+
+	const message_handler_t handle_TERMINATING_CONNECTION =
+		[this] (message_t type, message_len_t length, void* buffer)
+	{
+		TRACE_ENTER;
+		MESSAGE("Client is terminating the connection.");
+		close();
+		TRACE_EXIT;
+	};
 
   public:
-	WebcamServer(int port, string devicename) :
-		Server(port),
-		streamerThreadKeepGoing(false),
-		destructing(false)
+	WebcamServerConnection(int fd, in_addr_t remoteAddress, in_port_t remotePort):
+		Connection         (fd, remoteAddress, remotePort)
+		streamIsActiveFlag (false),
+		nowDestructingFlag (false)
 	{
-		int err;
-		
+		TRACE_ENTER;
+
 		TRACE("Creating webcam mutex...");
-		if((err = pthread_mutex_init(&webcamMutex, NULL))) {
+		int err = pthread_mutex_init(&webcamMutex, NULL);
+		if (err) {
 			THROW_ERROR("Error creating webcam mutex: " << strerror(err));
 		}
 
-		webcam = shared_ptr<Webcam>(new Webcam(devicename));
+		addDefaultMessageHandler(handleDefault);
+
+		// Laziness.
+		#define ADD_HANDLER (type) \
+			addMessageHandler(MSG_TYPE_##type, handle_##type);
+		ADD_HANDLER(QUERY_STREAM_STATUS);
+		ADD_HANDLER(QUERY_IMAGE_FORMAT);
+		ADD_HANDLER(QUERY_SUPPORTED_FORMATS);
+		ADD_HANDLER(USE_FORMAT);
+		ADD_HANDLER(START_STREAM);
+		ADD_HANDLER(PAUSE_STREAM);
+		ADD_HANDLER(ERROR_INVALID_INTERNAL);
+		ADD_HANDLER(ERROR_INVALID_MSG);
+		ADD_HANDLER(TERMINATING_CONNECTION);
+		#undef ADD_HANDLER
+
+		TRACE_EXIT;
 	}
 
 	~WebcamServer()
@@ -136,49 +187,77 @@ class WebcamServer: public Server
 
 	startStream ()
 	{
-		if (!streamerThreadKeepGoing)
+		if (!streamIsActiveFlag)
 		{
 			MESSAGE("Starting stream");
 
-			streamerThreadKeepGoing = true;
+			// Open webcam
+			MutexLock lock(webcamMutex);
+			lock.relock();
+			webcam = shared_ptr<Webcam>(new Webcam(devicename));
+			lock.unlock();
 
-			int err = pthread_create(&streamerHandle, NULL, _streamerThreadCaller, this);
-			if (err)
-			{
-				THROW_ERROR("Unable to start streamer thread: " << strerror(err));
-			}
+			streamIsActiveFlag = true;
+
+			streamerHandle = pthread_create_using_method<WebcamServerConnection, void*>(
+					*this, &WebcamServerConnection::streamerThread, NULL
+			);
+
+			sendMessge(MSG_TYPE_STREAM_IS_STARTED, 0, NULL);
 		}
 		else
 		{
 			MESSAGE("Stream is already started");
+			sendMessge(MSG_TYPE_STREAM_IS_STARTED, 0, NULL);
 		}
 	}
 
 	stopStream()
 	{
-		if (streamerThreadKeepGoing)
+		if (streamIsActiveFlag)
 		{
 			MESSAGE("Stopping stream");
 
 			// Allow the streamer thread to end itself naturally
-			streamerThreadKeepGoing = false;
+			streamIsActiveFlag = false;
 
-			int err = pthread_join(streamerHandle, NULL);
+			// Wait for the streamer thread to stop
+			int err = pthread_join(streamerThreadHandle, NULL);
 			if (err)
 			{
-				if (nowDestructing) {
+				if (nowDestructingFlag) {
 					WARNING("Unable to terminate streamer thread: " << strerror(err));
 				} else {
 					THROW_ERROR("Unable to terminate streamer thread: " << strerror(err));
 				}
 			}
+
+			// Release webcam
+			MutexLock lock(webcamMutex);
+			lock.relock();
+			webcam = shared_ptr<Webcam>();
+			lock.unlock();
+
+			sendMessge(MSG_TYPE_STREAM_IS_STOPPED, 0, NULL);
 		}
 		else
 		{
 			MESSAGE("Stream is already stopped");
+			sendMessge(MSG_TYPE_STREAM_IS_STOPPED, 0, NULL);
 		}
 	}
 
+};
+
+class WebcamServer: public Server
+{
+	shared_ptr<Connection>
+	newConnection (int fd, in_addr_t remoteAddress, in_port_t remotePort)
+	{
+		TRACE_ENTER;
+		return shared_ptr<Connection>(new WebcamServerConnection(fd, remoteAddress, remotePort));
+		TRACE_EXIT;
+	}
 };
 
 void
@@ -203,10 +282,8 @@ main (int argc, char* args[]) {
 			port = DEFAULT_PORT;
 		}
 
-		shared_ptr<EchoServer> server(new EchoServer(port));
-
-		// Wait for server to terminate
-		server->joinReaderThread();
+		WebcamServer server;
+		server.start(port);
 
 		return 0;
 
@@ -218,5 +295,4 @@ main (int argc, char* args[]) {
 		return 1;
 	}
 }
-
 

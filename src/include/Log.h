@@ -1,6 +1,9 @@
 #include <iostream>
 #include <sstream>
 
+#ifndef LOG_H
+#define LOG_H
+
 #define THROW_ERROR(error) \
 	std::stringstream err_ss; \
 	err_ss << __FUNCTION__ << ":" << __LINE__ << " " << error;\
@@ -49,4 +52,6 @@
 #else
 # define ERROR(x)
 #endif
+
+#endif // LOG_H
 

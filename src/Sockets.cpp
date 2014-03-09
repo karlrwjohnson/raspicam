@@ -9,7 +9,6 @@
 #include <sys/socket.h> // socket()
 
 #include <errno.h>      // errno
-#include <cstdio>       // printf()
 #include <cstring>      // strerror()
 #include <iostream>     // cout
 #include <pthread.h>    // multithreading
@@ -208,7 +207,19 @@ Connection::sendMessage (message_t type, size_t length, void* data)
 }
 
 void
-Connection::addMessageHandler (message_t type, message_handler_t& handler)
+Connection::sendMessage (message_t type, string text)
+{
+	sendMessage(type, text.length(), (void*) text.c_str());
+}
+
+void
+Connection::sendMessage (message_t type)
+{
+	sendMessage(type, 0, NULL);
+}
+
+void
+Connection::addMessageHandler (message_t type, const message_handler_t& handler)
 {
 	TRACE_ENTER;
 
@@ -237,7 +248,7 @@ Connection::addMessageHandler (message_t type, message_handler_t& handler)
 }
 
 void
-Connection::addDefaultMessageHandler (message_handler_t& handler)
+Connection::addDefaultMessageHandler (const message_handler_t& handler)
 {
 	TRACE_ENTER;
 
@@ -260,7 +271,7 @@ Connection::addDefaultMessageHandler (message_handler_t& handler)
 }
 
 void
-Connection::removeMessageHandler (message_t type, message_handler_t& handler)
+Connection::removeMessageHandler (message_t type, const message_handler_t& handler)
 {
 	TRACE_ENTER;
 
@@ -294,7 +305,7 @@ Connection::removeMessageHandler (message_t type, message_handler_t& handler)
 }
 
 void
-Connection::removeDefaultMessageHandler (message_handler_t& handler)
+Connection::removeDefaultMessageHandler (const message_handler_t& handler)
 {
 	TRACE_ENTER;
 

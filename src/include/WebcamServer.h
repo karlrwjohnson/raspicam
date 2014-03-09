@@ -1,5 +1,4 @@
 
-#include <iostream>     // cout
 #include <pthread.h>    // multithreading
 #include <memory>       // shared_ptr
 #include <stdexcept>    // exceptions
@@ -20,10 +19,6 @@ using namespace std;
 class NoWebcamOpenException: public runtime_error
 {
   public:
-	NoWebcamOpenException () :
-		runtime_error ()
-	{ }
-
 	NoWebcamOpenException (std::string desc) :
 		runtime_error (desc)
 	{ }
@@ -43,16 +38,13 @@ class WebcamServerConnection: public Connection
 
 
   public:
-	WebcamServerConnection(int fd, in_addr_t remoteAddress, in_port_t remotePort):
-		Connection         (fd, remoteAddress, remotePort)
-		streamIsActiveFlag (false),
-		nowDestructingFlag (false)
+	WebcamServerConnection (int fd, in_addr_t remoteAddress, in_port_t remotePort);
 
-	~WebcamServer()
+	~WebcamServerConnection ();
 
   private:
-	void *
-	streamerThread ();
+	void
+	streamerThread (void* unused);
 
 	void
 	startStream ();
@@ -72,7 +64,7 @@ class WebcamServerConnection: public Connection
 	void
 	handle_CLIENT_MSG_CLOSE_WEBCAM          (message_t type, message_len_t len, void* data);
 	void
-	handle_CLIENT_MSG_GET_CURRRENT_SPEC     (message_t type, message_len_t len, void* data);
+	handle_CLIENT_MSG_GET_CURRENT_SPEC      (message_t type, message_len_t len, void* data);
 	void
 	handle_CLIENT_MSG_GET_STREAM_STATUS     (message_t type, message_len_t len, void* data);
 	void
@@ -84,7 +76,7 @@ class WebcamServerConnection: public Connection
 	void
 	handle_CLIENT_MSG_OPEN_WEBCAM           (message_t type, message_len_t len, void* data);
 	void
-	handle_CLIENT_MSG_PAUSE_STREAM          (message_t type, message_len_t len, void* data);
+	handle_CLIENT_MSG_STOP_STREAM           (message_t type, message_len_t len, void* data);
 	void
 	handle_CLIENT_MSG_SET_CURRENT_SPEC      (message_t type, message_len_t len, void* data);
 	void

@@ -1,6 +1,7 @@
 #ifndef WEBCAM_STREAM_COMMON
 #define WEBCAM_STREAM_COMMON
 
+#include <netinet/in.h> // in_addr_t, in_port_t
 #include <sstream>
 #include <string>
 
@@ -9,9 +10,9 @@ struct image_spec
 	uint32_t width;
 	uint32_t height;
 	uint32_t fmt;
-}
+};
 
-const uint16_t DEFAULT_PORT = 32123;
+const in_port_t DEFAULT_PORT = 32123;
 
 enum WEBCAM_SOCKET_MSG_ENUM
 {
@@ -104,7 +105,7 @@ enum WEBCAM_SOCKET_MSG_ENUM
 	 * @return SERVER_MSG_IMAGE_SPEC
 	 * @throws SERVER_ERR_NO_WEBCAM_OPENED   If no webcam has been opened
 	 */
-	CLIENT_MSG_GET_CURRRENT_SPEC,
+	CLIENT_MSG_GET_CURRENT_SPEC,
 
 	/**
 	 * Enumerate all available image specifications
@@ -265,7 +266,7 @@ webcamSocketMsgToString (uint32_t messageId)
 		DEFINE_MSG ( ERROR_MSG_TERMINATING_CONNECTION );
 
 		DEFINE_MSG ( CLIENT_MSG_CLOSE_WEBCAM          );
-		DEFINE_MSG ( CLIENT_MSG_GET_CURRRENT_SPEC     );
+		DEFINE_MSG ( CLIENT_MSG_GET_CURRENT_SPEC      );
 		DEFINE_MSG ( CLIENT_MSG_GET_STREAM_STATUS     );
 		DEFINE_MSG ( CLIENT_MSG_GET_SUPPORTED_SPECS   );
 		DEFINE_MSG ( CLIENT_MSG_GET_WEBCAM_STATUS     );
@@ -293,6 +294,7 @@ webcamSocketMsgToString (uint32_t messageId)
 	default:
 		ss << "(Unknown message type " << messageId << ")";
 		return ss.str();
+	}
 }
 
 #endif // WEBCAM_STREAM_COMMON

@@ -1,4 +1,5 @@
 
+#include <algorithm>    // for_each
 #include <iostream>     // cout
 #include <functional>   // bind()
 #include <pthread.h>    // multithreading
@@ -18,9 +19,9 @@ using namespace std;
 
 ///// WebcamServerConnection /////
 
-	WebcamServerConnection::WebcamServerConnection(int fd, in_addr_t remoteAddress, in_port_t remotePort):
+	WebcamServerConnection::WebcamServerConnection (int fd, in_addr_t remoteAddress, in_port_t remotePort):
 		Connection         (fd, remoteAddress, remotePort),
-		streamIsActiveFlag (false),
+		streamIsActiveFlag (false)
 	{
 		TRACE_ENTER;
 
@@ -47,36 +48,40 @@ using namespace std;
 		// passing member functions, the wrapper functions take the object-
 		// in-question (i.e. `this`) as their first parameter. Since handlers
 		// shouldn't need a `this` parameter, we bind() it out.
-		#define AUTO_ADD_HANDLER (msg_type)                   \
-			addMessageHandler(                                \
-				msg_type,                                     \
-				bind(                                         \
-					&WebcamServerConnection::handle##msg_type \
-					this,                                     \
-					std::placeholders::_1                     \
-				)                                             \
+		#define AUTO_ADD_HANDLER(msg_type)                      \
+			auto tmp_handler_##msg_type =                       \
+				bind(                                           \
+					&WebcamServerConnection::handle_##msg_type, \
+					this,                                       \
+					std::placeholders::_1,                      \
+					std::placeholders::_2,                      \
+					std::placeholders::_3                       \
+				);                                              \
+			addMessageHandler(                                  \
+				msg_type,                                       \
+				tmp_handler_##msg_type                          \
 			)
 
 			AUTO_ADD_HANDLER ( ERROR_MSG_INVALID_MSG            ); // DONE
 			AUTO_ADD_HANDLER ( ERROR_MSG_TERMINATING_CONNECTION ); // DONE
 
 			AUTO_ADD_HANDLER ( CLIENT_MSG_CLOSE_WEBCAM          ); // DONE
-			AUTO_ADD_HANDLER ( CLIENT_MSG_GET_CURRRENT_SPEC     ); // DONE
-			AUTO_ADD_HANDLER ( CLIENT_MSG_GET_STREAM_STATUS     );
+			AUTO_ADD_HANDLER ( CLIENT_MSG_GET_CURRENT_SPEC      ); // DONE
+			AUTO_ADD_HANDLER ( CLIENT_MSG_GET_STREAM_STATUS     ); // DONE
 			AUTO_ADD_HANDLER ( CLIENT_MSG_GET_SUPPORTED_SPECS   ); // DONE
 			AUTO_ADD_HANDLER ( CLIENT_MSG_GET_WEBCAM_STATUS     ); // DONE
 			AUTO_ADD_HANDLER ( CLIENT_MSG_GET_WEBCAM_LIST       ); //      TODO
 			AUTO_ADD_HANDLER ( CLIENT_MSG_OPEN_WEBCAM           ); // DONE
-			AUTO_ADD_HANDLER ( CLIENT_MSG_STOP_STREAM           );
+			AUTO_ADD_HANDLER ( CLIENT_MSG_STOP_STREAM           ); // DONE
 			AUTO_ADD_HANDLER ( CLIENT_MSG_SET_CURRENT_SPEC      ); // DONE
-			AUTO_ADD_HANDLER ( CLIENT_MSG_START_STREAM          );
+			AUTO_ADD_HANDLER ( CLIENT_MSG_START_STREAM          ); // DONE
 
 		#undef AUTO_ADD_HANDLER
 
 		TRACE_EXIT;
 	}
 
-	WebcamServerConnection::~WebcamServer()
+	WebcamServerConnection::~WebcamServerConnection ()
 	{
 		TRACE_ENTER;
 
@@ -99,8 +104,8 @@ using namespace std;
 		TRACE_EXIT;
 	}
 
-	void *
-	WebcamServerConnection::streamerThread ()
+	void
+	WebcamServerConnection::streamerThread (void* unused)
 	{
 		TRACE_ENTER;
 		try
@@ -117,16 +122,16 @@ using namespace std;
 				shared_ptr<MappedBuffer> frame = webcam->getFrame();
 				lock.unlock();
 
-				sendMessage(MSG_TYPE_FRAME, frame->length, frame->data);
+				sendMessage(SERVER_MSG_FRAME, frame->length, frame->data);
 			}
 
-			return NULL;
+			return;
 		}
 		catch (runtime_error e)
 		{
 			cerr << "!! Caught exception in reader thread:" << endl
 			     << "!! " << e.what() << endl;
-			return NULL;
+			return;
 		}
 	}
 
@@ -165,17 +170,18 @@ using namespace std;
 	{
 		TRACE_ENTER;
 		// TODO
-		sendMessage(SERVER_ERR_RUNTIME_ERROR, __FUNCTION__ " is currently unimplemented.");
+		sendMessage(SERVER_ERR_RUNTIME_ERROR, string(__FUNCTION__) + " is currently unimplemented.");
 		TRACE_EXIT;
 	}
 
+	void
 	WebcamServerConnection::handle_CLIENT_MSG_GET_WEBCAM_STATUS
 		(message_t type, message_len_t length, void* buffer)
 	{
 		TRACE_ENTER;
 
 		if (webcam) {
-			sendMessage(SERVER_MSG_WEBCAM_IS_OPENED, webcam->filename);
+			sendMessage(SERVER_MSG_WEBCAM_IS_OPENED, webcam->getFilename());
 		} else {
 			sendMessage(SERVER_MSG_WEBCAM_IS_CLOSED);
 		}
@@ -192,7 +198,7 @@ using namespace std;
 		// TODO: Implement some sort of list of devices so we can validate this
 		// against that list and not, oh, say, inject shell code !!?!
 		// At least validate the filename!
-		string newFilename = string(buffer, length);
+		string newFilename = string(reinterpret_cast<char*>(buffer), length);
 		shared_ptr<Webcam> newcam;
 
 		try
@@ -221,7 +227,7 @@ using namespace std;
 		webcam = newcam;
 		lock.unlock();
 
-		sendMessage(SERVER_MSG_WEBCAM_IS_OPENED, webcam.filename);
+		sendMessage(SERVER_MSG_WEBCAM_IS_OPENED, webcam->getFilename());
 
 		TRACE_EXIT;
 	}
@@ -266,23 +272,23 @@ using namespace std;
 				lock.relock();
 
 				Webcam::fmtdesc_v fmts = *(webcam->getSupportedFormats());
-				for_each(fmts::begin(), fmts::end(), [this] (struct v4l2_fmtdesc fmt)
+				for_each(fmts.begin(), fmts.end(), [&specs, this] (struct v4l2_fmtdesc fmt)
 				{
-					Webcam::resolution_set rezes = *(webcam->getSupportedResolutions(fmt->pixelformat));
-					for_each(rezes::begin(), rezes::end(), [&] (resolution_t res)
+					Webcam::resolution_set rezes = *(webcam->getSupportedResolutions(fmt.pixelformat));
+					for_each(rezes.begin(), rezes.end(), [&specs, &fmt] (Webcam::resolution_t res)
 					{
-						specs.push_back({ res.first, res.second, fmt->pixelformat });
-					}
+						specs.push_back({ res.first, res.second, fmt.pixelformat });
+					});
 				});
 
 				lock.unlock();
 
-				sendMessage(SERVER_MSG_SUPPORTED_SPECS_LIST,
+				sendMessage(SERVER_MSG_SUPPORTED_SPECS,
 			            	specs.size() * sizeof(struct image_spec),
 			            	&(specs[0]));
 			}
-			catch (runtime_error e);
-			(
+			catch (runtime_error e)
+			{
 				ERROR(e.what());
 				sendMessage(SERVER_ERR_RUNTIME_ERROR, e.what());
 			}
@@ -307,7 +313,7 @@ using namespace std;
 				lock.relock();
 
 				struct image_spec spec;
-				resolution_t res = webcam->getResolution();
+				Webcam::resolution_t res = webcam->getResolution();
 				spec.width = res.first;
 				spec.height = res.second;
 				spec.fmt = webcam->getImageFormat();
@@ -316,8 +322,8 @@ using namespace std;
 				
 				sendMessage(SERVER_MSG_IMAGE_SPEC, sizeof(struct image_spec), &spec);
 			}
-			catch (runtime_error e);
-			(
+			catch (runtime_error e)
+			{
 				ERROR(e.what());
 				sendMessage(SERVER_ERR_RUNTIME_ERROR, e.what());
 			}
@@ -349,9 +355,12 @@ using namespace std;
 				webcam->setImageFormat(spec.fmt, spec.width, spec.height);
 
 				lock.unlock();
+
+				// If the above hasn't thrown an exception, tell the client it worked.
+				handle_CLIENT_MSG_GET_CURRENT_SPEC;
 			}
-			catch (runtime_error e);
-			(
+			catch (runtime_error e)
+			{
 				ERROR(e.what());
 				sendMessage(SERVER_ERR_RUNTIME_ERROR, e.what());
 			}
@@ -401,7 +410,7 @@ using namespace std;
 		else if (streamIsActiveFlag)
 		{
 			MESSAGE("Client tried to start a stream when it's already started");
-			sendMessage(SERVER_MSG_STREAM_IS_STARTED)
+			sendMessage(SERVER_MSG_STREAM_IS_STARTED);
 		}
 		else
 		{
@@ -411,11 +420,11 @@ using namespace std;
 			// being told to stop.
 			streamIsActiveFlag = true;
 
-			streamerHandle = pthread_create_using_method<WebcamServerConnection, void*>(
+			streamerThreadHandle = pthread_create_using_method<WebcamServerConnection, void*>(
 					*this, &WebcamServerConnection::streamerThread, NULL
 			);
 
-			sendMessage(SERVER_MSG_STREAM_IS_STARTED)
+			sendMessage(SERVER_MSG_STREAM_IS_STARTED);
 		}
 	}
 
@@ -460,7 +469,7 @@ using namespace std;
 
 		// Notify the client, if connected.
 		try {
-			sendMessge(MSG_TYPE_STREAM_IS_STOPPED, 0, NULL);
+			sendMessage(SERVER_MSG_STREAM_IS_STOPPED);
 		} catch (runtime_error e) {
 			ERROR(e.what());
 		}

@@ -229,7 +229,7 @@ xioctl (int fd, int request, void *arg) {
 	string
 	Webcam::getFilename ()
 	{
-		return device.filename;
+		return device->filename;
 	}
 
 	shared_ptr<Webcam::fmtdesc_v>
@@ -596,11 +596,11 @@ xioctl (int fd, int request, void *arg) {
 	Webcam::fmt2string (video_fmt_enum_t fmt)
 	{
 		char ret[4] = {
-			( fmt >>  0 ) & 0xff,
-			( fmt >>  8 ) & 0xff,
-			( fmt >> 16 ) & 0xff,
-			( fmt >> 24 ) & 0xff
-		}
+			static_cast<uint8_t>(( fmt >>  0 ) & 0xff),
+			static_cast<uint8_t>(( fmt >>  8 ) & 0xff),
+			static_cast<uint8_t>(( fmt >> 16 ) & 0xff),
+			static_cast<uint8_t>(( fmt >> 24 ) & 0xff)
+		};
 		return ret;
 	}
 

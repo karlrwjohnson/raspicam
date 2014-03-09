@@ -89,6 +89,9 @@ class Webcam {
 	void
 	setImageFormat (video_fmt_enum_t fmt, uint32_t width, uint32_t height);
 
+	void
+	setImageFormat (video_fmt_enum_t fmt, resolution_t res);
+
 	std::shared_ptr<resolution_set>
 	getSupportedResolutions (video_fmt_enum_t format);
 

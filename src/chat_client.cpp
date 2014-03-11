@@ -31,7 +31,7 @@ class ChatClientConnection: public Connection
 	message_handler_t handleMessageAck =
 		[this] (message_t type, message_len_t length, void* buffer)
 	{
-		MESSAGE("MSG_TYPE_MESSAGE_ACK received.");
+		MESSAGE("MSG_TYPE_MESSAGE_ACK received: " << string((char*) buffer, length));
 	};;
 
 public:
@@ -70,13 +70,13 @@ int main (int argc, char *args[])
 		ChatClient chatClient;
 		shared_ptr<Connection> conn = chatClient.connect("127.0.0.1", 32123);
 
-		conn->sendMessage(MSG_TYPE_HELLO, 0, NULL);
+		conn->sendMessage(MSG_TYPE_HELLO);
 
 		string input;
 		do {
 			getline(cin, input);
 			MESSAGE("Sending \"" << input << '"');
-			conn->sendMessage(MSG_TYPE_MESSAGE, input.size(), (void*) input.c_str());
+			conn->sendMessage(MSG_TYPE_MESSAGE, input);
 		} while(input != ".");
 	}
 	catch (runtime_error err)

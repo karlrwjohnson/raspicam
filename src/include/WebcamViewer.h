@@ -5,7 +5,7 @@
 
 #include <SDL2/SDL.h>
 
-#include <Webcam.h>
+#include "Webcam.h"
 
 #ifndef WEBCAM_VIEWER_H
 #define WEBCAM_VIEWER_H

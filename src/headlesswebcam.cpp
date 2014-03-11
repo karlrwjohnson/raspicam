@@ -30,10 +30,10 @@ main (int argc, char* args[]) {
 
 		webcam = shared_ptr<Webcam>(new Webcam(filename));
 
-		webcam->setDimensions(640, 480);
+		webcam->setResolution(640, 480);
 
-		vector<uint32_t> dimensions = webcam->getDimensions();
-		cout << "Dimensions are now " << dimensions[0] << "x" << dimensions[1] << "px.\n";
+		Webcam::resolution_t dimensions = webcam->getResolution();
+		cout << "Dimensions are now " << dimensions.first << "x" << dimensions.second << "px.\n";
 
 		webcam->startCapture();
 

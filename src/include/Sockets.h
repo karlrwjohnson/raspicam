@@ -96,14 +96,7 @@ class Connection {
   protected:
 
 	/// Sample message handler to notify the user about unhandled messages
-	const message_handler_t handleDefault =
-		[this] (message_t type, message_len_t length, void*buffer)
-	{
-		TRACE_ENTER;
-		MESSAGE("Unhandled message type " << std::dec << type
-		     << ". (Length = " << length << ")");
-		TRACE_EXIT;
-	};
+	const message_handler_t handleDefault;
 
   private:
 
@@ -124,6 +117,9 @@ class Connection {
 
 	/// Flag telling the reader thread to exit
 	bool stopReadingFlag;
+
+	/// Flag indicating that the connection is closed (set by the reader thread)
+	bool connectionClosedFlag;
 
   public:
 

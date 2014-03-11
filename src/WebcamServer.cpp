@@ -1,17 +1,10 @@
-
 #include <algorithm>    // for_each
 #include <iostream>     // cout
 #include <functional>   // bind()
-#include <pthread.h>    // multithreading
-#include <memory>       // shared_ptr
-#include <stdexcept>    // exceptions
-#include <sstream>      // stringstream (used by Log.h)
 #include <string>       // strings
 
 #include "Log.h"
-#include "Sockets.h"
 #include "Thread.h"
-#include "Webcam.h"
 #include "WebcamServer.h"
 #include "webcam_stream_common.h"
 
@@ -49,17 +42,18 @@ using namespace std;
 		// in-question (i.e. `this`) as their first parameter. Since handlers
 		// shouldn't need a `this` parameter, we bind() it out.
 		#define AUTO_ADD_HANDLER(msg_type)                      \
-			auto tmp_handler_##msg_type =                       \
+			boundHandlers.push_back(                            \
 				bind(                                           \
 					&WebcamServerConnection::handle_##msg_type, \
 					this,                                       \
 					std::placeholders::_1,                      \
 					std::placeholders::_2,                      \
 					std::placeholders::_3                       \
-				);                                              \
+				)                                               \
+			);                                                  \
 			addMessageHandler(                                  \
 				msg_type,                                       \
-				tmp_handler_##msg_type                          \
+				boundHandlers.back()                            \
 			)
 
 			AUTO_ADD_HANDLER ( ERROR_MSG_INVALID_MSG            ); // DONE
@@ -111,6 +105,9 @@ using namespace std;
 		try
 		{
 			MutexLock lock(webcamMutex);
+			lock.relock();
+			webcam->startCapture();
+			lock.unlock();
 
 			//TODO: Look into signals for a better way of getting the
 			// thread to terminate. In particular, I don't want to wait
@@ -126,6 +123,22 @@ using namespace std;
 			}
 
 			return;
+		}
+		catch (runtime_error e)
+		{
+			cerr << "!! Caught exception in reader thread:" << endl
+			     << "!! " << e.what() << endl;
+			return;
+		}
+
+		// Attempt to stop the webcam video capture. Do it in a try/catch block
+		// in case something happened to the webcam and this throws and error.
+		try
+		{
+			MutexLock lock(webcamMutex);
+			lock.relock();
+			webcam->stopCapture();
+			lock.unlock();
 		}
 		catch (runtime_error e)
 		{
@@ -357,7 +370,7 @@ using namespace std;
 				lock.unlock();
 
 				// If the above hasn't thrown an exception, tell the client it worked.
-				handle_CLIENT_MSG_GET_CURRENT_SPEC;
+				handle_CLIENT_MSG_GET_CURRENT_SPEC(CLIENT_MSG_GET_CURRENT_SPEC, 0, NULL);
 			}
 			catch (runtime_error e)
 			{
@@ -390,7 +403,7 @@ using namespace std;
 		catch (NoWebcamOpenException e)
 		{
 			ERROR(e.what());
-			sendMessage(SERVER_ERR_NO_WEBCAM_OPENED);
+			sendMessage(SERVER_ERR_NO_WEBCAM_OPENED, e.what());
 		}
 		catch (runtime_error e)
 		{
@@ -436,6 +449,7 @@ using namespace std;
 		try
 		{
 			stopStream();
+			sendMessage(SERVER_MSG_STREAM_IS_STOPPED);
 		}
 		catch (runtime_error e)
 		{

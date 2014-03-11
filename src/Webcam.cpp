@@ -294,7 +294,7 @@ xioctl (int fd, int request, void *arg) {
 			         << strerror(errno));
 		}
 
-		TRACE("Setting image format and resolution to " fmt2string(fmt) << ", "
+		TRACE("Setting image format and resolution to " << fmt2string(fmt) << ", "
 		   << width << "x" << height << "px");
 		format.fmt.pix.width = width;
 		format.fmt.pix.height = height;
@@ -511,85 +511,106 @@ xioctl (int fd, int request, void *arg) {
 	void
 	Webcam::startCapture ()
 	{
-		struct v4l2_requestbuffers req = {0};
-		req.count = 2;
-		req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-		req.memory = V4L2_MEMORY_MMAP;
+		if (!capturing)
+		{
+			struct v4l2_requestbuffers req = {0};
+			req.count = 2;
+			req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+			req.memory = V4L2_MEMORY_MMAP;
 
-		cout << "Requesting " << req.count << " frame buffers...\n";
-		xioctl(device->fd, VIDIOC_REQBUFS, &req);
-		if (errno == EINVAL) {
-			THROW_ERROR("Memory-map streaming is NOT supported.");
-		} else if (errno) {
-			THROW_ERROR("Error requesting buffer: " << strerror(errno));
-		} else {
-			cout << "\tMemory-map streaming IS supported.\n"
-			     << "\tBuffers allocated: " << req.count << "\n";
+			cout << "Requesting " << req.count << " frame buffers...\n";
+			xioctl(device->fd, VIDIOC_REQBUFS, &req);
+			if (errno == EINVAL) {
+				THROW_ERROR("Memory-map streaming is NOT supported.");
+			} else if (errno) {
+				THROW_ERROR("Error requesting buffer: " << strerror(errno));
+			} else {
+				cout << "\tMemory-map streaming IS supported.\n"
+			     	 << "\tBuffers allocated: " << req.count << "\n";
+			}
+
+			for (int i = 0; i < req.count; i++) {
+				framebuffers.push_back(shared_ptr<MappedBuffer>(new MappedBuffer(device->fd, i)));
+			}
+
+			// Code for multi-buffer streaming. I don't know how to do this, and so far
+			// I've been limited by the image sensor, so I figure two buffers are enough.
+	/*		fd_set fds;
+			FD_ZERO(&fds);
+			for (int i = 0; i < req.count
+			FD_SET(device->fd, &fds);
+			struct timeval timeout = {0};
+			timeout.tv_sec = 2;
+			int r = select(device->fd+1, &fds, NULL, NULL, &timeout);
+			cout << "Waiting for frame...\n";
+			if (r == -1) {
+				cout << "Error waiting for frame\n";
+				return 1;
+			}
+
+			cout << "Retrieving frame...\n";
+			//if (xioctl(device->fd, VIDIOC_DQBUF, &data)) {
+			if (xioctl(device->fd, VIDIOC_DQBUF, &framebuffers[0]->data)) {
+				THROW_ERROR("Error retrieving frame: " << strerror(errno));
+			} else {
+				cout << "Frame retrieved.\n";
+			}
+			// */
+
+			cout << "Starting capture...\n";
+			if (xioctl(device->fd, VIDIOC_STREAMON, &(req.type))) {
+				THROW_ERROR("Error starting capture: " << strerror(errno));
+			}
+
+			// Get the camera started on its first frame
+			currentBuffer = 0;
+			framebuffers[1 - currentBuffer]->enqueue();
+
+			capturing = true;
 		}
-
-		for (int i = 0; i < req.count; i++) {
-			framebuffers.push_back(shared_ptr<MappedBuffer>(new MappedBuffer(device->fd, i)));
+		else
+		{
+			TRACE("Capture is already started");
 		}
-
-		// Code for multi-buffer streaming. I don't know how to do this, and so far
-		// I've been limited by the image sensor, so I figure two buffers are enough.
-/*		fd_set fds;
-		FD_ZERO(&fds);
-		for (int i = 0; i < req.count
-		FD_SET(device->fd, &fds);
-		struct timeval timeout = {0};
-		timeout.tv_sec = 2;
-		int r = select(device->fd+1, &fds, NULL, NULL, &timeout);
-		cout << "Waiting for frame...\n";
-		if (r == -1) {
-			cout << "Error waiting for frame\n";
-			return 1;
-		}
-
-		cout << "Retrieving frame...\n";
-		//if (xioctl(device->fd, VIDIOC_DQBUF, &data)) {
-		if (xioctl(device->fd, VIDIOC_DQBUF, &framebuffers[0]->data)) {
-			THROW_ERROR("Error retrieving frame: " << strerror(errno));
-		} else {
-			cout << "Frame retrieved.\n";
-		}
-		// */
-
-		cout << "Starting capture...\n";
-		if (xioctl(device->fd, VIDIOC_STREAMON, &(req.type))) {
-			THROW_ERROR("Error starting capture: " << strerror(errno));
-		}
-
-		capturing = true;
-
-		// Get the camera started on its first frame
-		currentBuffer = 0;
-		framebuffers[1 - currentBuffer]->enqueue();
 	}
 
 	void
 	Webcam::stopCapture ()
 	{
-		// Tell the webcam to stop
-		cout << "Stopping capture...\n";
-		if (xioctl(device->fd, VIDIOC_STREAMOFF, &v4l2_buf_type_video_capture)) {
-			THROW_ERROR("Error stopping capture: " << strerror(errno));
+		if (capturing)
+		{
+			// Tell the webcam to stop
+			cout << "Stopping capture...\n";
+			if (xioctl(device->fd, VIDIOC_STREAMOFF, &v4l2_buf_type_video_capture)) {
+				THROW_ERROR("Error stopping capture: " << strerror(errno));
+			}
+
+			// I suppose we should deallocate the framebuffers as well.
+			// Heck, the destrctors can take care of it. Just overwrite the
+			// array to break the reference.
+			framebuffers = vector< shared_ptr<MappedBuffer> >();
+
+			capturing = false;
 		}
-
-		// I suppose we should deallocate the framebuffers as well.
-		// Heck, the destrctors can take care of it. Just overwrite the
-		// array to break the reference.
-		framebuffers = vector< shared_ptr<MappedBuffer> >();
-
-		capturing = false;
+		else
+		{
+			TRACE("Capture is already stopped");
+		}
 	}
 
 	shared_ptr<MappedBuffer>
 	Webcam::getFrame() {
-		currentBuffer = 1 - currentBuffer;
-		framebuffers[currentBuffer]->dequeue();
-		framebuffers[1 - currentBuffer]->enqueue();
-		return framebuffers[0];
+		if (capturing)
+		{
+			currentBuffer = 1 - currentBuffer;
+			framebuffers[currentBuffer]->dequeue();
+			framebuffers[1 - currentBuffer]->enqueue();
+			return framebuffers[0];
+		}
+		else
+		{
+			THROW_ERROR("Not currently capturing");
+		}
 	}
 
 	string

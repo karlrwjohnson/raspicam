@@ -15,6 +15,7 @@ class ChatServerConnection: public Connection
 	{
 		TRACE_ENTER;
 		MESSAGE("MSG_TYPE_HELLO received.");
+		sendMessage(MSG_TYPE_HELLO_ACK);
 		TRACE_EXIT;
 	};
 
@@ -23,6 +24,7 @@ class ChatServerConnection: public Connection
 	{
 		TRACE_ENTER;
 		MESSAGE("MSG_TYPE_MESSAGE received: " << string((char*) buffer, length));
+		sendMessage(MSG_TYPE_MESSAGE_ACK, length, buffer);
 		TRACE_EXIT;
 	};
 

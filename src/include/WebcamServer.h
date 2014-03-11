@@ -1,33 +1,26 @@
-
-#include <pthread.h>    // multithreading
-#include <memory>       // shared_ptr
-#include <stdexcept>    // exceptions
-#include <sstream>      // stringstream (used by Log.h)
-#include <string>       // strings
-
-#include "webcam_stream_common.h"
-#include "Log.h"
-#include "Sockets.h"
-#include "Thread.h"
-#include "Webcam.h"
-
 #ifndef WEBCAM_SERVER_H
 #define WEBCAM_SERVER_H
 
-using namespace std;
+#include <list>         // for the bound handlers
+#include <pthread.h>    // multithreading
+#include <memory>       // shared_ptr
+#include <stdexcept>    // exceptions
 
-class NoWebcamOpenException: public runtime_error
+#include "Sockets.h"
+#include "Webcam.h"
+
+class NoWebcamOpenException: public std::runtime_error
 {
   public:
 	NoWebcamOpenException (std::string desc) :
-		runtime_error (desc)
+		std::runtime_error (desc)
 	{ }
 };
 
 class WebcamServerConnection: public Connection
 {
   private:
-	shared_ptr<Webcam> webcam;
+	std::shared_ptr<Webcam> webcam;
 
 	pthread_t streamerThreadHandle;
 
@@ -36,6 +29,11 @@ class WebcamServerConnection: public Connection
 	/// Tells the streamer thread to stop sending frames and return.
 	bool streamIsActiveFlag;
 
+	/// Temporary: I need somewhere to store the bound handlers that
+	/// lives as long as the connection.
+	/// I'm planning on refactoring Connection so this isn't necessary.
+	std::list<message_handler_t>
+	boundHandlers;
 
   public:
 	WebcamServerConnection (int fd, in_addr_t remoteAddress, in_port_t remotePort);
@@ -86,7 +84,7 @@ class WebcamServerConnection: public Connection
 
 class WebcamServer: public Server
 {
-	shared_ptr<Connection>
+	std::shared_ptr<Connection>
 	newConnection (int fd, in_addr_t remoteAddress, in_port_t remotePort);
 };
 

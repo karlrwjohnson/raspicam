@@ -94,10 +94,19 @@ MutexLock::relock ()
 //--- Connection ---//
 
 Connection::Connection (int fd_, in_addr_t remoteAddress_, in_port_t remotePort_):
-	fd              (fd_),
-	remoteAddress   (remoteAddress_),
-	remotePort      (remotePort_),
-	stopReadingFlag (true)
+	fd                   (fd_),
+	remoteAddress        (remoteAddress_),
+	remotePort           (remotePort_),
+	stopReadingFlag      (true),
+	connectionClosedFlag (false),
+	handleDefault (
+		[this] (message_t type, message_len_t length, void*buffer)
+	{
+		TRACE_ENTER;
+		MESSAGE("Unhandled message type " << std::dec << type
+		     << ". (Length = " << length << ")");
+		TRACE_EXIT;
+	})
 {
 	TRACE_ENTER;
 
@@ -169,6 +178,10 @@ Connection::sendMessage (message_t type, size_t length, void* data)
 	MessageHeader header;
 	header.type = type;
 	header.length = length;
+
+	if (connectionClosedFlag) {
+		THROW_ERROR("Connection has closed.");
+	}
 
 	if (data == NULL && length != 0) {
 		THROW_ERROR("Null data pointer given with nonzero length = " << length
@@ -415,6 +428,14 @@ Connection::readerThread (void* unused)
 		cerr << "!! Caught exception in reader thread:" << endl
 			 << "!! " << e.what() << endl;
 	}
+	catch (bad_function_call e)
+	{
+		cerr << "!! Caught exception in reader thread:" << endl
+			 << "!! " << e.what() << endl;
+	}
+
+	connectionClosedFlag = true;
+
 	TRACE_EXIT;
 }
 
@@ -586,6 +607,7 @@ Client::connect (string ipAddress, in_port_t port)
 	}
 
 	connection = newConnection(fd, serverAddress.sin_addr.s_addr, serverAddress.sin_port);
+	connection->startReaderThread();
 
 	return connection;
 }

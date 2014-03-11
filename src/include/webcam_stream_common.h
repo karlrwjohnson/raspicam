@@ -251,7 +251,7 @@ enum WEBCAM_SOCKET_MSG_ENUM
   ///@}
 };
 
-std::string
+inline std::string
 webcamSocketMsgToString (uint32_t messageId)
 {
 	std::stringstream ss;

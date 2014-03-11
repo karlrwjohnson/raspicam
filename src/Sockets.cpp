@@ -483,7 +483,7 @@ Server::start (in_port_t port)
 	MESSAGE("Binding to socket with IP address "
 	     << ip2string(ntohl(bindAddress.sin_addr.s_addr))
 	     << ", port " << ntohs(bindAddress.sin_port));
-	if (bind(fd, (sockaddr *) &bindAddress, sizeof(bindAddress))) {
+	if (::bind(fd, (sockaddr *) &bindAddress, sizeof(bindAddress))) {
 		close(fd);
 		fd = -1;
 		THROW_ERROR("bind() failed: " << strerror(errno));

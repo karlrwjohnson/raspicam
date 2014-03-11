@@ -250,7 +250,7 @@ class Server
 	bool stopAcceptingFlag;
 
 	/// How many connections can wait in line for accept()
-	const int INCOMING_CONNECTION_QUEUE_SIZE = 5;
+	static const int INCOMING_CONNECTION_QUEUE_SIZE = 5;
 
   protected:
 

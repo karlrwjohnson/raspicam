@@ -18,6 +18,7 @@ int
 main (int argc, char* args[]) {
 
 	try {
+		string address;
 		int port;
 
 		if (argc >= 3) {
@@ -30,8 +31,14 @@ main (int argc, char* args[]) {
 			port = DEFAULT_PORT;
 		}
 
+		if (argc >= 2) {
+			address = args[1];
+		} else {
+			address = "127.0.0.1";
+		}
+
 		WebcamClient client;
-		shared_ptr<Connection> conn = client.connect("127.0.0.1", port);
+		shared_ptr<Connection> conn = client.connect(address, port);
 		//shared_ptr<WebcamClientConnection> conn =
 		//	dynamic_pointer_cast<WebcamClientConnection, Connection>
 		//	();
